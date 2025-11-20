@@ -5,7 +5,7 @@ import { tool } from 'langchain';
 import { z } from 'zod';
 import { requireWorkspacePath } from '../path/resolver.js';
 
-const runImageAnalyzer = async (workspaceRoot: string, absolutePath: string) => {
+export const analyzeImagePath = async (workspaceRoot: string, absolutePath: string) => {
   const scriptPath = path.join(workspaceRoot, 'scripts/image_analyzer.py');
   return new Promise<string>((resolve, reject) => {
     const child = spawn(process.env.AGEN_TUI_PYTHON ?? 'python3', [scriptPath, '--input', absolutePath], {
@@ -36,7 +36,7 @@ const analyzeImageTool = (workspaceRoot: string) =>
         return error instanceof Error ? error.message : String(error);
       }
       await fs.access(resolved);
-      const raw = await runImageAnalyzer(workspaceRoot, resolved);
+      const raw = await analyzeImagePath(workspaceRoot, resolved);
       return `Image analysis for ${resolved}: ${raw}`;
     },
     {

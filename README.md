@@ -6,8 +6,9 @@ Codex-inspired terminal client that wraps LangChain Deep Agents. The app exposes
 
 - **DeepAgents integration** with OpenAI `gpt-5-mini` by default.
 - **Filesystem-aware mentions**: typing `@src/ui/App.tsx` auto-completes paths and turns them into the virtual `/src/ui/App.tsx` references DeepAgents expects.
-- **Filesystem harness shortcuts**: natural prompts such as "list the files in @node_modules/" or "search for 'FilesystemBackend' in @src/" automatically call the correct tools (`ls`, `read_file`, `glob`, `grep`, etc.).
+- **Filesystem harness shortcuts**: natural prompts such as "list the files in @node_modules/" or "search for 'FilesystemBackend' in @src/" automatically call the correct tools (`ls`, `read_file`, `glob`, `grep`, etc.). The shortcuts now understand both the legacy `targetPath` style arguments and DeepAgents' canonical `file_path` / `dir_path` names, so GPT-4o-mini and GPT-5-mini both stay happy.
 - **Intent-aware routing** that classifies each prompt as conversational, filesystem, notebook, or mixed so the agent responds naturally when no tools are needed and plans multi-step work when they are.
+- **Notebook IQ** – `ipynb_create`, `ipynb_patch`, `ipynb_run`, `ipynb_analyze`, and the new `ipynb_artifacts` tool let the agent create, edit, execute, summarize, and look up artifact locations without manual spelunking. See `docs/notebook-pipeline.md`.
 - **Inline CLI mode** via `npm run agent -- "prompt"` for deterministic testing.
 - **Reasoning visibility control**: the model emits `ReasoningVisible: yes|no` before every response so greetings stay clean while multi-step/tool work streams a dim gray plan.
 - **Natural-language action summaries** so the Actions list reads like “Listed / (23 entries)” instead of raw JSON blobs.
@@ -48,7 +49,7 @@ OPENAI_MODEL=gpt-5-mini # optional override
 | `npm run test` | Vitest test suite (config loader, session reducer, agent, mention utilities).
 | `npm run lint` / `npm run lint:fix` | ESLint checks for `src/`.
 | `npm run agent -- "prompt"` | Fire a single prompt without launching the TUI (see below).
-| `npm run agent:smoke` | Runs four representative prompts (greeting, listing, summary, notebook creation) via the CLI for a quick end-to-end smoke test. Retries each prompt once if the model hiccups. |
+| `npm run agent:smoke` | Runs six representative prompts (greeting, listing, summary, notebook creation, notebook summarize, patch+run) via the CLI for a quick end-to-end smoke test. Retries each prompt once if the model hiccups. |
 | `npm run agent:testfs` | Filesystem regression harness (resets `tmp/fs-spec`, then exercises list/copy/read/glob/delete prompts against the real workspace). |
 
 ### Inline CLI examples
@@ -75,7 +76,7 @@ npm run agent -- "delete @README.backup"               # custom delete tool
 
 - Keep a second terminal running CLI prompts for iterative development. Example: `npm run agent -- "list the files in @tmp/"`.
 - For filesystem-heavy changes, run `npm run agent:testfs` before and after edits to ensure list/copy/read/delete flows continue to work.
-- `npm run agent:smoke` is useful after touching prompt routing or notebook behavior—it exercises greeting, listing, README summarization, and notebook creation.
+- `npm run agent:smoke` is useful after touching prompt routing or notebook behavior—it now exercises greeting, listing, notebook summarization, notebook creation, and a patch → run → artifact listing workflow. See [`docs/notebook-pipeline.md`](docs/notebook-pipeline.md) for the full create → patch → run → summarize → artifacts diagram.
 
 ## Filesystem Shortcuts
 

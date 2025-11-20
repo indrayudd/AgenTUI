@@ -17,6 +17,22 @@ export const stripReasoningVisibilityLine = (
   return { text: remainder, visible };
 };
 
+const dedupeLines = (text: string) => {
+  const lines = text.split('\n');
+  const result: string[] = [];
+  lines.forEach((line) => {
+    const last = result[result.length - 1];
+    if (last === line) {
+      return;
+    }
+    if (!line.trim() && !last?.trim()) {
+      return;
+    }
+    result.push(line);
+  });
+  return result.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+};
+
 export const splitReasoningAndAnswer = (raw: string) => {
   if (!raw) {
     return { reasoning: '', answer: '' };
@@ -33,5 +49,5 @@ export const splitReasoningAndAnswer = (raw: string) => {
     actionsIndex === -1
       ? beforeAnswer
       : beforeAnswer.slice(0, actionsIndex).trim();
-  return { reasoning, answer, visible };
+  return { reasoning: dedupeLines(reasoning), answer, visible };
 };

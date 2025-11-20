@@ -28,15 +28,23 @@ const extractText = (value: unknown): string | null => {
 };
 
 const extractLangChainContent = (payload: unknown): string | null => {
-  const candidate = Array.isArray(payload) ? payload[0] : payload;
-  if (!candidate || typeof candidate !== 'object') {
-    return null;
+  const candidates = Array.isArray(payload) ? payload : [payload];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') {
+      continue;
+    }
+    const record = candidate as Record<string, unknown>;
+    if (typeof record.content === 'string') {
+      return record.content;
+    }
+    if (record.kwargs && typeof record.kwargs === 'object') {
+      const nested = extractText((record.kwargs as { content?: unknown }).content);
+      if (nested) {
+        return nested;
+      }
+    }
   }
-  if ('content' in (candidate as Record<string, unknown>) && typeof (candidate as { content?: unknown }).content === 'string') {
-    return (candidate as { content?: string }).content ?? null;
-  }
-  const nested = (candidate as { kwargs?: { content?: unknown } })?.kwargs?.content;
-  return extractText(nested);
+  return null;
 };
 
 const stringifyPayload = (payload: unknown): string => {

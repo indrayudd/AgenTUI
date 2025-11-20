@@ -1,23 +1,23 @@
 # Project State & Handoff Notes
 
-_Last updated after Cleanup 5 (filesystem reliability)._
+_Last updated after Sprint 6 (Notebook & Image flows)._ 
 
 ## Current Behavior
 
 - **Real filesystem access**: The DeepAgents backend now runs with `virtualMode: false`, so `/Users/.../Projects/AgenTUI` matches what the CLI/UI display. Mentions (e.g., `@tmp/foo`) resolve to absolute paths before being sent to the LLM.
 - **Reasoning/Actions UI**: Reasoning text is light-gray italics and omitted for trivial replies. Actions are rendered as natural-language summaries (e.g., `Listed /Users/.../tmp/ (0 entries)`).
 - **Routing**: Conversation vs. tool intents are determined by `routePrompt`. Affirmative follow-ups (e.g., “yes, list them”) automatically escalate to tools.
+- **Notebook tooling**: The agent exposes `ipynb_create`, `ipynb_patch`, `ipynb_run`, `ipynb_analyze`, and `ipynb_artifacts` for create → patch → run → summarize → artifact lookup flows. See `docs/notebook-pipeline.md`.
 - **Regression harnesses**:
-  - `npm run agent:smoke` – greeting + listing + README summary + notebook creation.
+  - `npm run agent:smoke` – greeting + listing + README summary + notebook creation + notebook summarize + patch→run→artifact listing prompts.
   - `npm run agent:testfs` – resets `tmp/fs-spec` then runs list/copy/read/glob/delete prompts to ensure the agent sees the real filesystem consistently.
   - `npm run test` – Vitest suite (config, router, mentions, tool summarizer, etc.).
 
-## Outstanding Work (Cleanup 5 onwards)
+## Outstanding Work
 
-1. **Action Parser Enhancements** – Already emits natural sentences, but watch for new tool types when adding capabilities (update `src/utils/tool-summaries.ts` and tests).
-2. **Path Highlighting** – Current regex covers most extensions; expand `PATH_FILE_EXTENSIONS` if new file types appear frequently.
-3. **Filesystem Features** – Expand `scripts/test-filesystem.ts` with additional scenarios (append/move/delete directories, notebook helpers) as we build more shortcuts.
-4. **Documentation** – Keep this file and the cleanup plans (`cleanup5_plan.md` / `cleanup5_specs.md`) up to date when new behaviors land.
+1. **Enhanced notebook analysis** – CSV plotting helpers and richer summarize output (Phase 4 follow-ups) are still pending.
+2. **Artifact Q&A UX** – `ipynb_artifacts` lists files; future work can auto-link images into final answers or surface quick “analyze_image” suggestions.
+3. **Docs/QA** – README + `docs/notebook-pipeline.md` cover today’s pipeline; keep them synchronized with future work and expand troubleshooting tips as new flows land.
 
 ## Getting Started
 

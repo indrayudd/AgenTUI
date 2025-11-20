@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import path from 'path';
 import { promises as fs } from 'fs';
-import { createNotebook, runNotebook, summarizeNotebook } from '../src/tools/notebook.js';
+import { createNotebook, runNotebook, summarizeNotebook, patchNotebook } from '../src/tools/notebook.js';
 
 const root = process.cwd();
 
@@ -28,6 +28,27 @@ const main = async () => {
 
   const summary = await summarizeNotebook(root, executed);
   console.log(summary.raw);
+
+  const patched = 'examples/notebooks/demo-patched.ipynb';
+  await patchNotebook(
+    root,
+    target,
+    [
+      {
+        action: 'insert_after',
+        cellIndex: 0,
+        newCell: { cell_type: 'markdown', source: 'Patched note: rerun with different description.' }
+      }
+    ],
+    patched
+  );
+  console.log(`Patched notebook written to ${patched}`);
+
+  const rerunOutput = 'examples/notebooks/demo-patched-executed.ipynb';
+  const rerunResult = await runNotebook(root, patched, rerunOutput);
+  console.log(rerunResult.message);
+  const rerunSummary = await summarizeNotebook(root, rerunOutput);
+  console.log(rerunSummary.raw);
 };
 
 main().catch((err) => {

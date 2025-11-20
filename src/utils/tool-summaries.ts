@@ -76,7 +76,11 @@ const normalizeToolInput = <T extends Record<string, unknown>>(input: unknown): 
     }
   }
   if (typeof current === 'object' && current !== null) {
-    return current as T;
+    const value = current as Record<string, unknown>;
+    if ('kwargs' in value && value.kwargs && typeof value.kwargs === 'object') {
+      return value.kwargs as T;
+    }
+    return value as T;
   }
   return undefined;
 };
@@ -192,10 +196,12 @@ const summarizers: Record<
   (params: SummaryParams) => string
 > = {
   list_path: ({ input, output, status }) => {
-    const payload = normalizeToolInput<{ targetPath?: string; path?: string }>(input);
+    const payload = normalizeToolInput<{ targetPath?: string; path?: string; dir_path?: string }>(input);
     const targetPath =
       payload?.targetPath ??
+      payload?.dir_path ??
       payload?.path ??
+      getFieldFromRaw(input, 'dir_path') ??
       getFieldFromRaw(input, 'targetPath') ??
       getFieldFromRaw(input, 'path') ??
       extractListingPath(output);
@@ -207,27 +213,55 @@ const summarizers: Record<
     return summary ? `Listed ${target} (${summary})` : `Listed ${target}`;
   },
   read_file: ({ input, output }) => {
-    const payload = normalizeToolInput<{ targetPath?: string }>(input);
-    const target = formatPath(payload?.targetPath);
+    const payload = normalizeToolInput<{ targetPath?: string; file_path?: string }>(input);
+    const target =
+      payload?.targetPath ??
+      payload?.file_path ??
+      getFieldFromRaw(input, 'file_path') ??
+      getFieldFromRaw(input, 'targetPath');
     const sizeSummary = summarizeRead(output);
-    return sizeSummary ? `Read ${target} (${sizeSummary})` : `Read ${target}`;
+    return sizeSummary ? `Read ${formatPath(target)} (${sizeSummary})` : `Read ${formatPath(target)}`;
   },
   write_file: ({ input }) => {
-    const payload = normalizeToolInput<{ targetPath?: string; content?: string }>(input);
-    const target = formatPath(payload?.targetPath);
-    const chars = payload?.content?.length ?? 0;
+    const payload = normalizeToolInput<{ targetPath?: string; file_path?: string; content?: string; text?: string }>(input);
+    const target =
+      payload?.targetPath ??
+      payload?.file_path ??
+      getFieldFromRaw(input, 'file_path') ??
+      getFieldFromRaw(input, 'targetPath');
+    const body = payload?.content ?? payload?.text ?? getFieldFromRaw(input, 'content') ?? getFieldFromRaw(input, 'text');
+    const chars = body?.length ?? 0;
     return `Wrote ${target} (${chars} char${chars === 1 ? '' : 's'})`;
   },
   append_file: ({ input }) => {
-    const payload = normalizeToolInput<{ targetPath?: string; content?: string }>(input);
-    const target = formatPath(payload?.targetPath);
-    const chars = payload?.content?.length ?? 0;
+    const payload = normalizeToolInput<{ targetPath?: string; file_path?: string; content?: string; text?: string }>(input);
+    const target =
+      payload?.targetPath ??
+      payload?.file_path ??
+      getFieldFromRaw(input, 'file_path') ??
+      getFieldFromRaw(input, 'targetPath');
+    const body = payload?.content ?? payload?.text ?? getFieldFromRaw(input, 'content') ?? getFieldFromRaw(input, 'text');
+    const chars = body?.length ?? 0;
     return `Appended ${chars} char${chars === 1 ? '' : 's'} to ${target}`;
   },
   copy_path: ({ input, output }) => {
-    const payload = normalizeToolInput<{ sourcePath?: string; destinationPath?: string; overwrite?: boolean }>(input) ?? {};
-    let source = payload?.sourcePath;
-    let destination = payload?.destinationPath;
+    const payload = normalizeToolInput<{
+      sourcePath?: string;
+      destinationPath?: string;
+      source_path?: string;
+      destination_path?: string;
+      overwrite?: boolean;
+    }>(input) ?? {};
+    let source =
+      payload?.sourcePath ??
+      payload?.source_path ??
+      getFieldFromRaw(input, 'source_path') ??
+      getFieldFromRaw(input, 'sourcePath');
+    let destination =
+      payload?.destinationPath ??
+      payload?.destination_path ??
+      getFieldFromRaw(input, 'destination_path') ??
+      getFieldFromRaw(input, 'destinationPath');
     if (!source || !destination) {
       const parsed = extractCopyPaths(output);
       source = parsed?.source ?? source;
@@ -240,9 +274,22 @@ const summarizers: Record<
       : `Copied ${formattedSource} → ${formattedDestination}`;
   },
   move_path: ({ input, output }) => {
-    const payload = normalizeToolInput<{ sourcePath?: string; destinationPath?: string }>(input) ?? {};
-    let source = payload?.sourcePath;
-    let destination = payload?.destinationPath;
+    const payload = normalizeToolInput<{
+      sourcePath?: string;
+      destinationPath?: string;
+      source_path?: string;
+      destination_path?: string;
+    }>(input) ?? {};
+    let source =
+      payload?.sourcePath ??
+      payload?.source_path ??
+      getFieldFromRaw(input, 'source_path') ??
+      getFieldFromRaw(input, 'sourcePath');
+    let destination =
+      payload?.destinationPath ??
+      payload?.destination_path ??
+      getFieldFromRaw(input, 'destination_path') ??
+      getFieldFromRaw(input, 'destinationPath');
     if ((!source || !destination) && typeof output === 'string') {
       const parsed = extractCopyPaths(output);
       source = parsed?.source ?? source;
@@ -251,16 +298,24 @@ const summarizers: Record<
     return `Moved ${formatPath(source)} → ${formatPath(destination)}`;
   },
   delete_path: ({ input, output }) => {
-    const payload = normalizeToolInput<{ targetPath?: string }>(input);
+    const payload = normalizeToolInput<{ targetPath?: string; file_path?: string }>(input);
     if (typeof output === 'string' && output.startsWith('Deleted ')) {
       return output;
     }
-    const target = formatPath(payload?.targetPath);
+    const target =
+      payload?.targetPath ??
+      payload?.file_path ??
+      getFieldFromRaw(input, 'file_path') ??
+      getFieldFromRaw(input, 'targetPath');
     return `Deleted ${target}`;
   },
   make_directory: ({ input, output }) => {
-    const payload = normalizeToolInput<{ targetPath?: string }>(input);
-    let target = payload?.targetPath;
+    const payload = normalizeToolInput<{ targetPath?: string; dir_path?: string }>(input);
+    let target =
+      payload?.targetPath ??
+      payload?.dir_path ??
+      getFieldFromRaw(input, 'dir_path') ??
+      getFieldFromRaw(input, 'targetPath');
     if ((!target || !target.length) && typeof output === 'string') {
       const match = /Created directory (.+)/i.exec(output);
       if (match) target = match[1];
@@ -268,22 +323,29 @@ const summarizers: Record<
     return `Created directory ${formatPath(target)}`;
   },
   search_text: ({ input, output }) => {
-    const payload = normalizeToolInput<{ pattern?: string; targetPath?: string; path?: string }>(input);
+    const payload = normalizeToolInput<{ pattern?: string; targetPath?: string; path?: string; dir_path?: string }>(input);
     const matches = summarizeMatches(output);
     const pattern =
       payload?.pattern ?? getFieldFromRaw(input, 'pattern') ?? getFieldFromRaw(input, 'query') ?? '';
     const target =
-      payload?.targetPath ?? payload?.path ?? getFieldFromRaw(input, 'targetPath') ?? getFieldFromRaw(input, 'path');
+      payload?.targetPath ??
+      payload?.dir_path ??
+      payload?.path ??
+      getFieldFromRaw(input, 'dir_path') ??
+      getFieldFromRaw(input, 'targetPath') ??
+      getFieldFromRaw(input, 'path');
     return `Searched "${pattern}" under ${formatPath(target)} (${matches} match${
       matches === 1 ? '' : 'es'
     })`;
   },
   glob_path: ({ input, output }) => {
-    const payload = normalizeToolInput<{ pattern?: string; targetPath?: string; path?: string; maxDepth?: number }>(input) ?? {};
+    const payload = normalizeToolInput<{ pattern?: string; targetPath?: string; path?: string; dir_path?: string; maxDepth?: number }>(input) ?? {};
     let pattern = payload?.pattern ?? getFieldFromRaw(input, 'pattern');
     let base =
       payload?.targetPath ??
+      payload?.dir_path ??
       payload?.path ??
+      getFieldFromRaw(input, 'dir_path') ??
       getFieldFromRaw(input, 'targetPath') ??
       getFieldFromRaw(input, 'path');
     if (!pattern) {
@@ -298,11 +360,21 @@ const summarizers: Record<
     })`;
   },
   diff_paths: ({ input, output }) => {
-    const payload = normalizeToolInput<{ leftPath?: string; rightPath?: string }>(input);
+    const payload = normalizeToolInput<{ leftPath?: string; rightPath?: string; left_path?: string; right_path?: string }>(input);
+    const left =
+      payload?.leftPath ??
+      payload?.left_path ??
+      getFieldFromRaw(input, 'left_path') ??
+      getFieldFromRaw(input, 'leftPath');
+    const right =
+      payload?.rightPath ??
+      payload?.right_path ??
+      getFieldFromRaw(input, 'right_path') ??
+      getFieldFromRaw(input, 'rightPath');
     if (typeof output === 'string' && output.includes('identical')) {
-      return `Diffed ${formatPath(payload?.leftPath)} vs ${formatPath(payload?.rightPath)} (identical)`;
+      return `Diffed ${formatPath(left)} vs ${formatPath(right)} (identical)`;
     }
-    return `Diffed ${formatPath(payload?.leftPath)} vs ${formatPath(payload?.rightPath)}`;
+    return `Diffed ${formatPath(left)} vs ${formatPath(right)}`;
   },
   write_todos: ({ output, status }) => {
     if (status === 'running') {

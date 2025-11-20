@@ -4,7 +4,9 @@ const prompts = [
   'hello',
   'how many cleanup* docs are there in level 0 of this workspace?',
   'list the files in @src/',
-  'create a notebook at @tmp/agent-smoke.ipynb with a single markdown cell titled "Smoke Test".'
+  'create a notebook at @tmp/agent-smoke.ipynb with a single markdown cell titled "Smoke Test".',
+  'summarize @notebooks/cosine_wave_plot.ipynb using notebook tools and mention the plots.',
+  'In @notebooks/cosine_wave_plot.ipynb add a code cell plotting y = x**2 + 1, run it, and list the generated images.'
 ];
 
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';

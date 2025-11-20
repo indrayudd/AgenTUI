@@ -31,8 +31,9 @@ const resolveForTool = (workspaceRoot: string, raw: string) => {
 
 const createLsTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath }: { targetPath?: string }) => {
-      const resolved = resolveForTool(workspaceRoot, targetPath ?? '.');
+    async ({ dir_path, targetPath }: { dir_path?: string; targetPath?: string }) => {
+      const rawPath = dir_path ?? targetPath ?? '.';
+      const resolved = resolveForTool(workspaceRoot, rawPath);
       try {
         const stats = await fs.stat(resolved.absolute);
         if (!stats.isDirectory()) {
@@ -48,19 +49,29 @@ const createLsTool = (workspaceRoot: string) =>
       name: 'list_path',
       description: 'List files/directories at a path (ls).',
       schema: z.object({
-        targetPath: z.string().optional().describe('Directory to list (default: current workspace root).')
+        dir_path: z.string().optional().describe('Directory to list (default workspace root).'),
+        targetPath: z.string().optional().describe('Alias for dir_path (legacy).')
       })
     }
   );
 
 const createReadTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath, maxBytes }: { targetPath: string; maxBytes?: number }) => {
+    async ({ file_path, targetPath, offset, limit }: { file_path?: string; targetPath?: string; offset?: number; limit?: number }) => {
       try {
-        const resolved = resolveForTool(workspaceRoot, targetPath);
-        const limit = maxBytes ?? 4000;
+        const rawPath = file_path ?? targetPath;
+        if (!rawPath) {
+          throw new Error('file_path is required');
+        }
+        const resolved = resolveForTool(workspaceRoot, rawPath);
+        const start = offset ?? 0;
+        const maxBytes = limit ?? 4000;
         const data = await fs.readFile(resolved.absolute, 'utf8');
-        return data.length > limit ? `${data.slice(0, limit)}\n… truncated (${data.length - limit} more bytes)` : data;
+        const sliced = data.slice(start, start + maxBytes);
+        if (data.length > start + maxBytes) {
+          return `${sliced}\n… truncated (${data.length - (start + maxBytes)} more bytes)`;
+        }
+        return sliced;
       } catch (error) {
         return wrapError(error);
       }
@@ -69,19 +80,29 @@ const createReadTool = (workspaceRoot: string) =>
       name: 'read_file',
       description: 'Read a file (cat/head).',
       schema: z.object({
-        targetPath: z.string().describe('File to read.'),
-        maxBytes: z.number().int().positive().optional().describe('Limit output size (default 4000 bytes).')
+        file_path: z.string().optional().describe('File to read.'),
+        targetPath: z.string().optional().describe('Alias for file_path (legacy).'),
+        offset: z.number().int().nonnegative().optional().describe('Starting byte offset (default 0).'),
+        limit: z.number().int().positive().optional().describe('Max bytes to return (default 4000).')
       })
     }
   );
 
 const createWriteTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath, content }: { targetPath: string; content: string }) => {
+    async ({ file_path, targetPath, content, text }: { file_path?: string; targetPath?: string; content?: string; text?: string }) => {
       try {
-        const resolved = resolveForTool(workspaceRoot, targetPath);
+        const rawPath = file_path ?? targetPath;
+        if (!rawPath) {
+          throw new Error('file_path is required');
+        }
+        const resolved = resolveForTool(workspaceRoot, rawPath);
+        const body = content ?? text;
+        if (body === undefined) {
+          throw new Error('content is required');
+        }
         await fs.mkdir(path.dirname(resolved.absolute), { recursive: true });
-        await fs.writeFile(resolved.absolute, content, 'utf8');
+        await fs.writeFile(resolved.absolute, body, 'utf8');
         return summarizeAction('Wrote file', resolved.absolute);
       } catch (error) {
         return wrapError(error);
@@ -91,18 +112,28 @@ const createWriteTool = (workspaceRoot: string) =>
       name: 'write_file',
       description: 'Create or overwrite a file with given content.',
       schema: z.object({
-        targetPath: z.string().describe('File to write.'),
-        content: z.string().describe('Content to write entirely.')
+        file_path: z.string().optional().describe('File to write.'),
+        targetPath: z.string().optional().describe('Alias for file_path.'),
+        content: z.string().optional().describe('Content to write.'),
+        text: z.string().optional().describe('Alias for content.')
       })
     }
   );
 
 const createAppendTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath, content }: { targetPath: string; content: string }) => {
+    async ({ file_path, targetPath, content, text }: { file_path?: string; targetPath?: string; content?: string; text?: string }) => {
       try {
-        const resolved = resolveForTool(workspaceRoot, targetPath);
-        await fs.appendFile(resolved.absolute, content, 'utf8');
+        const rawPath = file_path ?? targetPath;
+        if (!rawPath) {
+          throw new Error('file_path is required');
+        }
+        const resolved = resolveForTool(workspaceRoot, rawPath);
+        const body = content ?? text;
+        if (body === undefined) {
+          throw new Error('content is required');
+        }
+        await fs.appendFile(resolved.absolute, body, 'utf8');
         return summarizeAction('Appended to file', resolved.absolute);
       } catch (error) {
         return wrapError(error);
@@ -112,18 +143,37 @@ const createAppendTool = (workspaceRoot: string) =>
       name: 'append_file',
       description: 'Append text to an existing file.',
       schema: z.object({
-        targetPath: z.string().describe('File to append to.'),
-        content: z.string().describe('Text to append.')
+        file_path: z.string().optional().describe('File to append to.'),
+        targetPath: z.string().optional().describe('Alias for file_path.'),
+        content: z.string().optional().describe('Text to append.'),
+        text: z.string().optional().describe('Alias for content.')
       })
     }
   );
 
 const createCopyTool = (workspaceRoot: string) =>
   tool(
-    async ({ sourcePath, destinationPath, overwrite = false }: { sourcePath: string; destinationPath: string; overwrite?: boolean }) => {
+    async ({
+      sourcePath,
+      destinationPath,
+      source_path,
+      destination_path,
+      overwrite = false
+    }: {
+      sourcePath?: string;
+      destinationPath?: string;
+      source_path?: string;
+      destination_path?: string;
+      overwrite?: boolean;
+    }) => {
       try {
-        const source = resolveForTool(workspaceRoot, sourcePath);
-        const destination = resolveForTool(workspaceRoot, destinationPath);
+        const sourceRaw = sourcePath ?? source_path;
+        const destinationRaw = destinationPath ?? destination_path;
+        if (!sourceRaw || !destinationRaw) {
+          throw new Error('Both source_path and destination_path are required');
+        }
+        const source = resolveForTool(workspaceRoot, sourceRaw);
+        const destination = resolveForTool(workspaceRoot, destinationRaw);
         const stats = await fs.stat(source.absolute);
         await fs.mkdir(path.dirname(destination.absolute), { recursive: true });
         if (stats.isDirectory()) {
@@ -148,8 +198,10 @@ const createCopyTool = (workspaceRoot: string) =>
       name: 'copy_path',
       description: 'Copy a file or directory (cp).',
       schema: z.object({
-        sourcePath: z.string().describe('Source path.'),
-        destinationPath: z.string().describe('Destination path.'),
+        source_path: z.string().optional().describe('Source path.'),
+        destination_path: z.string().optional().describe('Destination path.'),
+        sourcePath: z.string().optional().describe('Alias for source_path.'),
+        destinationPath: z.string().optional().describe('Alias for destination_path.'),
         overwrite: z.boolean().optional().describe('Whether to overwrite destination if it exists.')
       })
     }
@@ -157,10 +209,27 @@ const createCopyTool = (workspaceRoot: string) =>
 
 const createMoveTool = (workspaceRoot: string) =>
   tool(
-    async ({ sourcePath, destinationPath, overwrite = false }: { sourcePath: string; destinationPath: string; overwrite?: boolean }) => {
+    async ({
+      sourcePath,
+      destinationPath,
+      source_path,
+      destination_path,
+      overwrite = false
+    }: {
+      sourcePath?: string;
+      destinationPath?: string;
+      source_path?: string;
+      destination_path?: string;
+      overwrite?: boolean;
+    }) => {
       try {
-        const source = resolveForTool(workspaceRoot, sourcePath);
-        const destination = resolveForTool(workspaceRoot, destinationPath);
+        const sourceRaw = sourcePath ?? source_path;
+        const destinationRaw = destinationPath ?? destination_path;
+        if (!sourceRaw || !destinationRaw) {
+          throw new Error('Both source_path and destination_path are required');
+        }
+        const source = resolveForTool(workspaceRoot, sourceRaw);
+        const destination = resolveForTool(workspaceRoot, destinationRaw);
         if (!overwrite) {
           try {
             await fs.access(destination.absolute);
@@ -180,8 +249,10 @@ const createMoveTool = (workspaceRoot: string) =>
       name: 'move_path',
       description: 'Move or rename files/directories (mv).',
       schema: z.object({
-        sourcePath: z.string().describe('Source path.'),
-        destinationPath: z.string().describe('Destination path.'),
+        source_path: z.string().optional().describe('Source path.'),
+        destination_path: z.string().optional().describe('Destination path.'),
+        sourcePath: z.string().optional().describe('Alias for source_path.'),
+        destinationPath: z.string().optional().describe('Alias for destination_path.'),
         overwrite: z.boolean().optional().describe('Set true to replace destination.')
       })
     }
@@ -189,9 +260,13 @@ const createMoveTool = (workspaceRoot: string) =>
 
 const createDeleteTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath }: { targetPath: string }) => {
+    async ({ file_path, targetPath }: { file_path?: string; targetPath?: string }) => {
       try {
-        const resolved = resolveForTool(workspaceRoot, targetPath);
+        const rawPath = file_path ?? targetPath;
+        if (!rawPath) {
+          throw new Error('file_path is required');
+        }
+        const resolved = resolveForTool(workspaceRoot, rawPath);
         await fs.rm(resolved.absolute, { recursive: true, force: true });
         return summarizeAction('Deleted', resolved.absolute);
       } catch (error) {
@@ -202,16 +277,21 @@ const createDeleteTool = (workspaceRoot: string) =>
       name: 'delete_path',
       description: 'Delete files or directories (rm -rf).',
       schema: z.object({
-        targetPath: z.string().describe('Path to delete.')
+        file_path: z.string().optional().describe('Path to delete.'),
+        targetPath: z.string().optional().describe('Alias for file_path.')
       })
     }
   );
 
 const createMkdirTool = (workspaceRoot: string) =>
   tool(
-    async ({ targetPath, recursive = true }: { targetPath: string; recursive?: boolean }) => {
+    async ({ dir_path, targetPath, recursive = true }: { dir_path?: string; targetPath?: string; recursive?: boolean }) => {
       try {
-        const resolved = resolveForTool(workspaceRoot, targetPath);
+        const rawPath = dir_path ?? targetPath;
+        if (!rawPath) {
+          throw new Error('dir_path is required');
+        }
+        const resolved = resolveForTool(workspaceRoot, rawPath);
         await fs.mkdir(resolved.absolute, { recursive });
         return summarizeAction('Created directory', resolved.absolute);
       } catch (error) {
@@ -222,7 +302,8 @@ const createMkdirTool = (workspaceRoot: string) =>
       name: 'make_directory',
       description: 'Create directories (mkdir).',
       schema: z.object({
-        targetPath: z.string().describe('Directory to create.'),
+        dir_path: z.string().optional().describe('Directory to create.'),
+        targetPath: z.string().optional().describe('Alias for dir_path.'),
         recursive: z.boolean().optional().describe('Whether to create parent folders (default true).')
       })
     }
@@ -230,9 +311,10 @@ const createMkdirTool = (workspaceRoot: string) =>
 
 const createSearchTool = (workspaceRoot: string) =>
   tool(
-    async ({ pattern, targetPath, maxDepth = 5 }: { pattern: string; targetPath?: string; maxDepth?: number }) => {
+    async ({ pattern, dir_path, targetPath, maxDepth = 5 }: { pattern: string; dir_path?: string; targetPath?: string; maxDepth?: number }) => {
       try {
-        const base = targetPath ? resolveForTool(workspaceRoot, targetPath).absolute : workspaceRoot;
+        const basePath = dir_path ?? targetPath;
+        const base = basePath ? resolveForTool(workspaceRoot, basePath).absolute : workspaceRoot;
         const regex = new RegExp(pattern, 'i');
         const results: string[] = [];
         await walkDirectory(base, async (abs, entry, depth) => {
@@ -261,7 +343,8 @@ const createSearchTool = (workspaceRoot: string) =>
       description: 'Search files for a regex or keyword (non-recursive by default).',
       schema: z.object({
         pattern: z.string().describe('Regex or plain-text pattern to search for.'),
-        targetPath: z.string().optional().describe('Directory to search (default workspace root).'),
+        dir_path: z.string().optional().describe('Directory to search (default workspace root).'),
+        targetPath: z.string().optional().describe('Alias for dir_path.'),
         maxDepth: z.number().int().min(0).optional().describe('Maximum directory depth to search (default 5).')
       })
     }
@@ -269,9 +352,10 @@ const createSearchTool = (workspaceRoot: string) =>
 
 const createGlobTool = (workspaceRoot: string) =>
   tool(
-    async ({ pattern, targetPath, maxDepth = 0 }: { pattern: string; targetPath?: string; maxDepth?: number }) => {
+    async ({ pattern, dir_path, targetPath, maxDepth = 0 }: { pattern: string; dir_path?: string; targetPath?: string; maxDepth?: number }) => {
       try {
-        const base = targetPath ? resolveForTool(workspaceRoot, targetPath).absolute : workspaceRoot;
+        const basePath = dir_path ?? targetPath;
+        const base = basePath ? resolveForTool(workspaceRoot, basePath).absolute : workspaceRoot;
         const regex = globToRegex(pattern);
         const matches: string[] = [];
         await walkDirectory(
@@ -296,7 +380,8 @@ const createGlobTool = (workspaceRoot: string) =>
       description: 'Find files matching a glob pattern at a given depth.',
       schema: z.object({
         pattern: z.string().describe('Glob pattern (e.g., *.md).'),
-        targetPath: z.string().optional().describe('Directory to search (default workspace root).'),
+        dir_path: z.string().optional().describe('Directory to search (default workspace root).'),
+        targetPath: z.string().optional().describe('Alias for dir_path.'),
         maxDepth: z.number().int().min(0).optional().describe('Depth to traverse (default 1 for top-level).')
       })
     }
@@ -327,10 +412,25 @@ const globToRegex = (pattern: string) => {
 
 const createDiffTool = (workspaceRoot: string) =>
   tool(
-    async ({ leftPath, rightPath }: { leftPath: string; rightPath: string }) => {
+    async ({
+      leftPath,
+      rightPath,
+      left_path,
+      right_path
+    }: {
+      leftPath?: string;
+      rightPath?: string;
+      left_path?: string;
+      right_path?: string;
+    }) => {
       try {
-        const left = resolveForTool(workspaceRoot, leftPath);
-        const right = resolveForTool(workspaceRoot, rightPath);
+        const leftRaw = leftPath ?? left_path;
+        const rightRaw = rightPath ?? right_path;
+        if (!leftRaw || !rightRaw) {
+          throw new Error('Both left_path and right_path are required');
+        }
+        const left = resolveForTool(workspaceRoot, leftRaw);
+        const right = resolveForTool(workspaceRoot, rightRaw);
         const [leftContent, rightContent] = await Promise.all([
           fs.readFile(left.absolute, 'utf8'),
           fs.readFile(right.absolute, 'utf8')
@@ -362,8 +462,10 @@ const createDiffTool = (workspaceRoot: string) =>
       name: 'diff_paths',
       description: 'Compare two files (rough diff).',
       schema: z.object({
-        leftPath: z.string().describe('First file.'),
-        rightPath: z.string().describe('Second file.')
+        left_path: z.string().optional().describe('First file.'),
+        right_path: z.string().optional().describe('Second file.'),
+        leftPath: z.string().optional().describe('Alias for left_path.'),
+        rightPath: z.string().optional().describe('Alias for right_path.')
       })
     }
   );

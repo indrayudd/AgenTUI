@@ -91,7 +91,7 @@ const formatInstructions = (intent: PromptIntent) => {
     case 'filesystem':
       return 'Plan filesystem actions, keep your to-do list updated, and describe every tool result in plain language.';
     case 'notebook':
-      return 'Use notebook/ipynb helpers along with filesystem tools to satisfy the request, updating the plan as you go.';
+      return 'Use notebook/ipynb helpers (create/run/analyze/patch/artifacts) with filesystem tools, updating the plan and reporting artifact locations clearly.';
     case 'mixed':
     default:
       return 'Blend conversational guidance with the necessary filesystem/notebook tools, explaining why each action is needed.';

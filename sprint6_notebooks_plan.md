@@ -37,10 +37,7 @@
 1. **Artifact foldering**  
    - Runner saves PNGs under `<executed>-artifacts/cell-N.png` and returns `{ cell, path }`.  
    - Tools propagate this metadata so the UI and future prompts can mention `@notebooks/demo-executed-artifacts/cell-0.png`.
-2. **Auto vision analysis**  
-   - Extend DeepAgents middleware or the notebook tool to queue `analyze_image` for each artifact (respecting rate limits).  
-   - TUI should show the caption inline (“Cell 2 image: resolution 640x480, dominant color RGB(2, 120, 200)”).
-3. **Answering “where is the image?”**  
+2. **Answering “where is the image?”**  
    - Implement a helper that searches the last notebook run metadata to answer location questions without rerunning the notebook.
 
 ## Phase 4 – Output Summaries & CLI Coverage
@@ -68,7 +65,7 @@
 
 ## Validation Checklist (Exit Criteria)
 - [ ] Guardrail markdown is referenced in router/system prompt and verified via unit test.
-- [ ] Runner outputs metadata + artifacts with deterministic paths; PNG analysis triggered automatically.
+- [ ] Runner outputs metadata + artifacts with deterministic paths.
 - [ ] Notebook patching tool works for insert/replace/delete operations and is covered by tests.
 - [ ] Smoke scripts demonstrate the three target flows (create from CSV, patch/rerun, summarize outputs).
 - [ ] QA commands pass without breaking filesystem features.
