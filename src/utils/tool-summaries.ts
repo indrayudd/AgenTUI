@@ -1,4 +1,4 @@
-import { summarizeText } from './text.js';
+import { formatToolDetail, summarizeText } from './text.js';
 
 type ToolStatus = 'running' | 'success' | 'error';
 
@@ -323,8 +323,10 @@ const summarizers: Record<
     if (status !== 'success') {
       return `Running notebook ${formatPath(payload?.inputPath)}`;
     }
-    if (typeof output === 'string') {
-      return summarizeText(output, 140);
+    const text = formatToolDetail(output, 200);
+    if (text) {
+      const beforeRaw = text.split('Raw response:')[0].trim();
+      return beforeRaw || summarizeText(text, 140);
     }
     return `Ran notebook ${formatPath(payload?.inputPath)} → ${formatPath(payload?.outputPath)}`;
   },
@@ -339,7 +341,7 @@ const defaultSummarizer = ({ normalized, rawName, status, output }: SummaryParam
   if (status === 'running') {
     return `Running ${label}`;
   }
-  const summary = summarizeText(typeof output === 'string' ? output : JSON.stringify(output ?? ''), 80);
+  const summary = summarizeText(formatToolDetail(output), 80);
   return summary ? `${label}: ${summary}` : label;
 };
 

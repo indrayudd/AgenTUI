@@ -1,10 +1,10 @@
 import type { AgentMessage, AgentRunner } from './index.js';
 import type { MessageAction } from '../state/session.js';
 import type { TokenUsage } from '../state/usage.js';
-import { formatToolDetail } from '../utils/text.js';
 import { formatActionDigest } from '../utils/actions.js';
 import { stripReasoningVisibilityLine } from '../utils/messages.js';
 import { describeToolAction } from '../utils/tool-summaries.js';
+import { formatToolDetail } from '../utils/text.js';
 
 export type PlanSource = 'llm' | 'todos';
 
@@ -213,6 +213,17 @@ export const streamAgentEvents = async (
         formatToolDetail(event?.data?.output),
         'success'
       );
+      traceLog('tool_end', {
+        name: existing?.name ?? event?.name,
+        runId,
+        rawOutput: event?.data?.output,
+        rawOutputType: typeof event?.data?.output,
+        rawOutputKeys:
+          event?.data?.output && typeof event?.data?.output === 'object'
+            ? Object.keys(event.data.output as Record<string, unknown>)
+            : null,
+        detail
+      });
       const action: MessageAction = {
         id: runId || existing?.id || `tool-${Date.now()}`,
         name: existing?.name ?? (typeof event?.name === 'string' ? event.name : 'tool'),
@@ -233,6 +244,13 @@ export const streamAgentEvents = async (
         formatToolDetail(event?.data ?? event?.error),
         'error'
       );
+      traceLog('tool_error', {
+        name: existing?.name ?? event?.name,
+        runId,
+        rawOutput: event?.data ?? event?.error,
+        rawOutputType: typeof (event?.data ?? event?.error),
+        detail
+      });
       const action: MessageAction = {
         id: runId || existing?.id || `tool-${Date.now()}`,
         name: existing?.name ?? (typeof event?.name === 'string' ? event.name : 'tool'),
@@ -269,4 +287,10 @@ export const streamAgentEvents = async (
   state.answer = cleanedAnswer.trim();
   onEvent({ kind: 'answer', text: state.answer });
   return state;
+};
+const TRACE_ACTIONS = process.env.AGEN_TUI_ACTION_TRACE === '1';
+const traceLog = (...parts: unknown[]) => {
+  if (TRACE_ACTIONS) {
+    console.log('[action-trace]', ...parts);
+  }
 };

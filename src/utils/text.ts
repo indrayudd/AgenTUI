@@ -32,8 +32,11 @@ const extractLangChainContent = (payload: unknown): string | null => {
   if (!candidate || typeof candidate !== 'object') {
     return null;
   }
-  const content = (candidate as { kwargs?: { content?: unknown } })?.kwargs?.content;
-  return extractText(content);
+  if ('content' in (candidate as Record<string, unknown>) && typeof (candidate as { content?: unknown }).content === 'string') {
+    return (candidate as { content?: string }).content ?? null;
+  }
+  const nested = (candidate as { kwargs?: { content?: unknown } })?.kwargs?.content;
+  return extractText(nested);
 };
 
 const stringifyPayload = (payload: unknown): string => {
