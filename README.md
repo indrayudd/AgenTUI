@@ -9,6 +9,7 @@ Codex-inspired terminal client that wraps LangChain Deep Agents. The app exposes
 - **Filesystem harness shortcuts**: natural prompts such as "list the files in @node_modules/" or "search for 'FilesystemBackend' in @src/" automatically call the correct tools (`ls`, `read_file`, `glob`, `grep`, etc.). The shortcuts now understand both the legacy `targetPath` style arguments and DeepAgents' canonical `file_path` / `dir_path` names, so GPT-4o-mini and GPT-5-mini both stay happy.
 - **Intent-aware routing** that classifies each prompt as conversational, filesystem, notebook, or mixed so the agent responds naturally when no tools are needed and plans multi-step work when they are.
 - **Notebook IQ** – `ipynb_create`, `ipynb_patch`, `ipynb_run`, `ipynb_analyze`, and the new `ipynb_artifacts` tool let the agent create, edit, execute, summarize, and look up artifact locations without manual spelunking. See `docs/notebook-pipeline.md`.
+- **Responsive composer** – the input box now buffers keystrokes locally (no more overwritten characters), expands up to 6 lines, scrolls internally when you paste large blocks of text, sanitizes clipboard junk (CR/LF/tabs) so borders never explode, and is backed by a deterministic `renderComposerView(value, cursor, width)` helper so layout/viewport changes are snapshot-tested.
 - **Inline CLI mode** via `npm run agent -- "prompt"` for deterministic testing.
 - **Reasoning visibility control**: the model emits `ReasoningVisible: yes|no` before every response so greetings stay clean while multi-step/tool work streams a dim gray plan.
 - **Natural-language action summaries** so the Actions list reads like “Listed / (23 entries)” instead of raw JSON blobs.
@@ -46,7 +47,7 @@ OPENAI_MODEL=gpt-5-mini # optional override
 | `npm run dev` | Start the Ink TUI with live reload.
 | `npm run build` | Type-check and emit JS into `dist/`.
 | `npm start` | Run the compiled CLI from `dist/`.
-| `npm run test` | Vitest test suite (config loader, session reducer, agent, mention utilities).
+| `npm run test` | Vitest test suite (config loader, session reducer, agent, mention utilities, composer renderer snapshots).
 | `npm run lint` / `npm run lint:fix` | ESLint checks for `src/`.
 | `npm run agent -- "prompt"` | Fire a single prompt without launching the TUI (see below).
 | `npm run agent:smoke` | Runs six representative prompts (greeting, listing, summary, notebook creation, notebook summarize, patch+run) via the CLI for a quick end-to-end smoke test. Retries each prompt once if the model hiccups. |
@@ -135,6 +136,7 @@ The UI and CLI render these events as the familiar **Reasoning → Actions → A
 3. Inline CLI smoke tests: run the examples above plus `npm run agent -- "hello"` and `npm run agent -- "create a notebook @examples/foo.ipynb"` to confirm the router flips between conversational and tool-driven flows, or use `npm run agent:smoke` to execute the default prompt set sequentially.
 4. Filesystem regression: `npm run agent:testfs` to exercise list/copy/read/glob/delete flows against the real `tmp/fs-spec` fixture whenever filesystem changes are introduced.
 5. Launch `npm run dev`, exercise slash commands (`/model`, `/new`, `/undo`, `/files`), and watch the dim-gray Reasoning block appear only when meaningful plan output exists.
+6. Composer manual QA: with the TUI focused on the composer, paste a wall of text (≥8 lines), verify only 6 lines are visible with `⋮` glyphs above/below when clipped, and use arrow keys across wrapped lines to confirm the cursor never bleeds outside the border.
 
 ## Notes
 

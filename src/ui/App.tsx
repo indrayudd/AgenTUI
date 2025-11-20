@@ -18,6 +18,11 @@ import {
   formatMentionValue,
   getMentionRanges
 } from './mentions.js';
+import {
+  renderComposerView,
+  sanitizeComposerText,
+  type DisplayLine
+} from './composer-renderer.js';
 import { maybeExecuteFsCommand } from '../fs/shortcuts.js';
 import { prepareAgentInput } from '../agent/prompt.js';
 import { streamAgentEvents, type AgentStructuredEvent } from '../agent/events.js';
@@ -981,6 +986,20 @@ interface FooterProps {
   composerWidth: number;
 }
 
+type ComposerInputProps = {
+  value: string;
+  cursor: number;
+  onChange: (value: string) => void;
+  onCursorChange: (cursor: number) => void;
+  onSubmit: () => void;
+  focus: boolean;
+  disabled: boolean;
+  submitDisabled: boolean;
+  placeholder?: string;
+  width: number;
+  highlightMentions?: boolean;
+};
+
 const Footer: React.FC<FooterProps> = ({
   input,
   cursor,
@@ -1400,20 +1419,6 @@ const collectMentionOptions = (node: FileNode | null, root: string): MentionOpti
 };
 
 
-interface ComposerInputProps {
-  value: string;
-  cursor: number;
-  onChange: (value: string) => void;
-  onCursorChange: (cursor: number) => void;
-  onSubmit: () => void;
-  focus: boolean;
-  disabled: boolean;
-  submitDisabled: boolean;
-  placeholder?: string;
-  width: number;
-  highlightMentions?: boolean;
-}
-
 function ComposerInput({
   value,
   cursor,
@@ -1429,53 +1434,109 @@ function ComposerInput({
 }: ComposerInputProps) {
   const isActive = focus && !disabled;
 
-  const clampedCursor = Math.min(Math.max(cursor, 0), value.length);
+  const safeValue = useMemo(() => sanitizeComposerText(value), [value]);
+  const safeCursor = Math.min(Math.max(cursor, 0), safeValue.length);
+
+  useEffect(() => {
+    if (safeValue !== value) {
+      onChange(safeValue);
+    }
+  }, [safeValue, value, onChange]);
+
+  const valueRef = useRef(safeValue);
+  const cursorRef = useRef(safeCursor);
+  useEffect(() => {
+    valueRef.current = safeValue;
+  }, [safeValue]);
+  useEffect(() => {
+    cursorRef.current = safeCursor;
+  }, [safeCursor]);
+
+  const getLiveValue = useCallback(() => valueRef.current, []);
+  const getLiveCursor = useCallback(() => {
+    const liveValue = valueRef.current;
+    const liveCursor = cursorRef.current ?? cursor;
+    return Math.min(Math.max(liveCursor, 0), liveValue.length);
+  }, [cursor]);
 
   const stickyColumnRef = useRef<number | null>(null);
   useEffect(() => {
     stickyColumnRef.current = null;
   }, [width]);
 
-  const displayLines = useMemo(() => buildDisplayLines(value, width), [value, width]);
-  const mentionRanges = useMemo(() => (highlightMentions ? getMentionRanges(value) : []), [highlightMentions, value]);
+  const composerView = useMemo(
+    () => renderComposerView(safeValue, safeCursor, width),
+    [safeValue, safeCursor, width]
+  );
+  const displayLines = composerView.displayLines;
+  const displayLinesRef = useRef(displayLines);
+  useEffect(() => {
+    displayLinesRef.current = displayLines;
+  }, [displayLines]);
+
+  const mentionRanges = useMemo(
+    () => (highlightMentions ? getMentionRanges(safeValue) : []),
+    [highlightMentions, safeValue]
+  );
 
   const insertText = useCallback(
     (text: string) => {
       if (!text) return;
-      const before = value.slice(0, clampedCursor);
-      const after = value.slice(clampedCursor);
-      const nextCursor = clampedCursor + text.length;
+      const normalizedChunk = sanitizeComposerText(text);
+      if (!normalizedChunk) return;
+      const clampedCursor = getLiveCursor();
+      const liveValue = getLiveValue();
+      const before = liveValue.slice(0, clampedCursor);
+      const after = liveValue.slice(clampedCursor);
+      const nextCursor = clampedCursor + normalizedChunk.length;
       stickyColumnRef.current = null;
-      onCursorChange(nextCursor);
-      onChange(before + text + after);
+      const nextValue = before + normalizedChunk + after;
+      const normalizedNext = sanitizeComposerText(nextValue);
+      const adjustedCursor = Math.min(nextCursor, normalizedNext.length);
+      valueRef.current = normalizedNext;
+      cursorRef.current = adjustedCursor;
+      onCursorChange(adjustedCursor);
+      onChange(normalizedNext);
     },
-    [value, clampedCursor, onChange, onCursorChange]
+    [getLiveCursor, getLiveValue, onChange, onCursorChange]
   );
 
   const moveHorizontal = useCallback(
     (delta: number) => {
       stickyColumnRef.current = null;
-      onCursorChange(Math.min(Math.max(clampedCursor + delta, 0), value.length));
+      const clampedCursor = getLiveCursor();
+      const liveValue = getLiveValue();
+      const nextCursor = Math.min(Math.max(clampedCursor + delta, 0), liveValue.length);
+      cursorRef.current = nextCursor;
+      onCursorChange(nextCursor);
     },
-    [clampedCursor, onCursorChange, value.length]
+    [getLiveCursor, getLiveValue, onCursorChange]
   );
 
   const removeChar = useCallback(
     (offset: -1 | 0) => {
+      const clampedCursor = getLiveCursor();
       if (offset === -1 && clampedCursor === 0) return;
-      if (offset === 0 && clampedCursor >= value.length) return;
+      const liveValue = getLiveValue();
+      if (offset === 0 && clampedCursor >= liveValue.length) return;
       const removeIndex = offset === -1 ? clampedCursor - 1 : clampedCursor;
-      const before = value.slice(0, removeIndex);
-      const after = value.slice(removeIndex + 1);
+      const before = liveValue.slice(0, removeIndex);
+      const after = liveValue.slice(removeIndex + 1);
       stickyColumnRef.current = null;
-      onCursorChange(Math.max(removeIndex, 0));
-      onChange(before + after);
+      const nextValue = before + after;
+      const normalizedNext = sanitizeComposerText(nextValue);
+      const nextCursor = Math.max(Math.min(removeIndex, normalizedNext.length), 0);
+      cursorRef.current = nextCursor;
+      onCursorChange(nextCursor);
+      valueRef.current = normalizedNext;
+      onChange(normalizedNext);
     },
-    [clampedCursor, onChange, onCursorChange, value]
+    [getLiveCursor, getLiveValue, onChange, onCursorChange]
   );
 
   const getCursorSnapshot = useCallback(() => {
-    const lines = displayLines.length > 0 ? displayLines : [{ start: 0, end: 0, columns: [0] }];
+    const lines = displayLinesRef.current.length > 0 ? displayLinesRef.current : [{ start: 0, end: 0, columns: [0] }];
+    const clampedCursor = getLiveCursor();
     let row = lines.length - 1;
     for (let idx = 0; idx < lines.length; idx++) {
       const line = lines[idx];
@@ -1496,7 +1557,7 @@ function ComposerInput({
     const relativeIndex = Math.max(0, Math.min(line.columns.length - 1, clampedCursor - line.start));
     const column = line.columns[relativeIndex] ?? 0;
     return { row, column, lines };
-  }, [clampedCursor, displayLines]);
+  }, [displayLinesRef, getLiveCursor]);
 
   const indexForColumn = useCallback((line: DisplayLine, targetColumn: number) => {
     if (line.columns.length === 0 || targetColumn <= 0) {
@@ -1525,7 +1586,7 @@ function ComposerInput({
       }
       if (direction === 1 && snapshot.row >= snapshot.lines.length - 1) {
         stickyColumnRef.current = desiredColumn;
-        onCursorChange(value.length);
+        onCursorChange(safeValue.length);
         return;
       }
       const targetRow = Math.min(
@@ -1536,8 +1597,9 @@ function ComposerInput({
       const targetIndex = indexForColumn(targetLine, desiredColumn);
       stickyColumnRef.current = desiredColumn;
       onCursorChange(targetIndex);
+      cursorRef.current = targetIndex;
     },
-    [getCursorSnapshot, indexForColumn, onCursorChange, value.length]
+    [getCursorSnapshot, indexForColumn, onCursorChange]
   );
 
   useInput(
@@ -1602,7 +1664,7 @@ function ComposerInput({
     (start: number, end: number) => {
       if (start >= end) return null;
       if (!highlightMentions || mentionRanges.length === 0) {
-        return value.slice(start, end);
+        return safeValue.slice(start, end);
       }
       const nodes: React.ReactNode[] = [];
       let pointer = start;
@@ -1613,31 +1675,76 @@ function ComposerInput({
         }
         if (range.start > pointer) {
           nodes.push(
-            <Text key={`plain-${segmentId++}`}>{value.slice(pointer, Math.min(range.start, end))}</Text>
+            <Text key={`plain-${segmentId++}`}>{safeValue.slice(pointer, Math.min(range.start, end))}</Text>
           );
         }
         const overlapStart = Math.max(range.start, start);
         const overlapEnd = Math.min(range.end, end);
         nodes.push(
           <Text key={`mention-${segmentId++}`} color="cyan">
-            {value.slice(overlapStart, overlapEnd)}
+            {safeValue.slice(overlapStart, overlapEnd)}
           </Text>
         );
         pointer = overlapEnd;
       });
       if (pointer < end) {
-        nodes.push(<Text key={`plain-${segmentId++}`}>{value.slice(pointer, end)}</Text>);
+        nodes.push(<Text key={`plain-${segmentId++}`}>{safeValue.slice(pointer, end)}</Text>);
       }
       return nodes;
     },
-    [highlightMentions, mentionRanges, value]
+    [highlightMentions, mentionRanges, safeValue]
   );
 
-  if (!value.length && !isActive) {
+  const clampedCursor = safeCursor;
+
+  const linesToRender = composerView.visibleLines.length
+    ? composerView.visibleLines
+    : [{ start: 0, end: 0, columns: [0] }];
+  const clippedTop = composerView.clippedTop;
+  const clippedBottom = composerView.clippedBottom;
+
+  const padLine = (line: DisplayLine) => {
+    const textSlice = safeValue.slice(line.start, line.end);
+    const paddingWidth = Math.max(0, width - stringWidth(textSlice));
+    return ' '.repeat(paddingWidth);
+  };
+
+  const renderLineWithCursor = (line: DisplayLine) => {
+    const afterFull = safeValue.slice(clampedCursor);
+    const isNewlineCursor = afterFull.startsWith('\n');
+    const cursorChar = isNewlineCursor ? ' ' : afterFull.length > 0 ? afterFull[0] : ' ';
+    const consumed = afterFull.length > 0 ? 1 : 0;
+    const beforeNodes = renderPortion(line.start, clampedCursor);
+    const afterNodes = renderPortion(clampedCursor + consumed, line.end);
+    return (
+      <Text wrap="truncate-end">
+        {beforeNodes}
+        <Text inverse>{cursorChar}</Text>
+        {afterNodes ?? ''}
+        {padLine(line)}
+      </Text>
+    );
+  };
+
+  const renderLine = (line: DisplayLine) => {
+    const cursorWithin = isActive && clampedCursor >= line.start && clampedCursor <= line.end;
+    if (cursorWithin) {
+      return renderLineWithCursor(line);
+    }
+    const portion = renderPortion(line.start, line.end) ?? ' ';
+    return (
+      <Text wrap="truncate-end">
+        {portion}
+        {padLine(line)}
+      </Text>
+    );
+  };
+
+  if (!safeValue.length && !isActive) {
     return placeholder ? <Text dimColor>{placeholder}</Text> : <Text> </Text>;
   }
 
-  if (!value.length && isActive) {
+  if (!safeValue.length && isActive) {
     return (
       <Text>
         <Text inverse> </Text>
@@ -1646,83 +1753,26 @@ function ComposerInput({
     );
   }
 
-  if (!isActive) {
-    return <Text>{value}</Text>;
-  }
-
-  const afterFull = value.slice(clampedCursor);
-  const isNewlineCursor = afterFull.startsWith('\n');
-  const cursorChar = isNewlineCursor ? ' ' : afterFull.length > 0 ? afterFull[0] : ' ';
-  const consumed = afterFull.length > 0 ? 1 : 0;
-  const beforeNodes = renderPortion(0, clampedCursor);
-  const afterNodes = renderPortion(clampedCursor + consumed, value.length);
-
   return (
-    <Text>
-      {beforeNodes}
-      <Text inverse>{cursorChar}</Text>
-      {isNewlineCursor ? '\n' : ''}
-      {afterNodes}
-    </Text>
+    <Box flexDirection="column" width={Math.max(4, width)}>
+      {clippedTop && (
+        <Text dimColor>
+          ⋮
+        </Text>
+      )}
+      {linesToRender.map((line, idx) => (
+        <Box key={`${line.start}-${idx}`}>
+          {renderLine(line)}
+        </Box>
+      ))}
+      {clippedBottom && (
+        <Text dimColor>
+          ⋮
+        </Text>
+      )}
+    </Box>
   );
 }
-
-type DisplayLine = {
-  start: number;
-  end: number;
-  columns: number[];
-};
-
-const buildDisplayLines = (text: string, width: number): DisplayLine[] => {
-  const wrapLimit = width > 0 ? width : Number.POSITIVE_INFINITY;
-  const lines: DisplayLine[] = [];
-  let currentStart = 0;
-  let currentWidth = 0;
-  let idx = 0;
-  let columns: number[] = [0];
-
-  const pushLine = (endIndex: number) => {
-    lines.push({ start: currentStart, end: endIndex, columns });
-    currentStart = endIndex;
-    currentWidth = 0;
-    columns = [0];
-  };
-
-  while (idx < text.length) {
-    const codePoint = text.codePointAt(idx);
-    if (codePoint === undefined) {
-      break;
-    }
-    const char = String.fromCodePoint(codePoint);
-    const charLen = char.length;
-
-    if (char === '\n') {
-      pushLine(idx);
-      idx += charLen;
-      currentStart = idx;
-      continue;
-    }
-
-    const charWidth = Math.max(1, stringWidth(char));
-
-    if (Number.isFinite(wrapLimit) && currentWidth + charWidth > wrapLimit && columns.length > 1) {
-      pushLine(idx);
-      continue;
-    }
-
-    currentWidth += charWidth;
-    columns.push(currentWidth);
-    idx += charLen;
-  }
-
-  pushLine(text.length);
-
-  if (lines.length === 0) {
-    lines.push({ start: 0, end: 0, columns: [0] });
-  }
-
-  return lines;
-};
 
 const openDirectory = (dir: string) => {
   const platform = process.platform;

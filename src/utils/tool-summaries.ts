@@ -115,11 +115,6 @@ const formatPath = (value?: unknown, fallback = '/') => {
   return fallback;
 };
 
-const countLines = (value: unknown) => {
-  if (typeof value !== 'string') return 0;
-  return value.split('\n').filter((line) => line.trim().length).length;
-};
-
 const summarizeListing = (output: unknown) => {
   if (typeof output !== 'string') return '';
   const lines = output.split('\n');
