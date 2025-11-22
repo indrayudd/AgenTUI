@@ -18,6 +18,7 @@ import {
   formatMentionValue,
   getMentionRanges
 } from './mentions.js';
+import { formatActionDigest } from '../utils/actions.js';
 import {
   renderComposerView,
   sanitizeComposerText,
@@ -28,6 +29,7 @@ import { prepareAgentInput } from '../agent/prompt.js';
 import { streamAgentEvents, type AgentStructuredEvent } from '../agent/events.js';
 import { formatActionSummary } from '../utils/actions.js';
 import { splitReasoningAndAnswer } from '../utils/messages.js';
+import { loadImageAttachments } from '../utils/images.js';
 
 const BRAND_COLOR = 'magenta';
 const SIDEBAR_MIN_WIDTH = 110;
@@ -39,6 +41,15 @@ const SIDEBAR_WIDTH = 32;
 const MAX_TREE_DEPTH = 6;
 const EXPLORER_VISIBLE_ROWS = 24;
 const MAX_MENTION_SUGGESTIONS = 10;
+
+const stripStructuredNoise = (answer: string) => {
+  if (!answer) return '';
+  let cleaned = answer.replace(/ReasoningVisible:.*\n?/gi, '');
+  cleaned = cleaned.replace(/Plan:\n[\s\S]*?(?=\n\n|Actions:|Answer:|$)/gi, '');
+  cleaned = cleaned.replace(/Actions:\n[\s\S]*?(?=\n\n|Answer:|$)/gi, '');
+  cleaned = cleaned.replace(/Completed actions.*$/gim, '').trim();
+  return cleaned.trim();
+};
 
 const roleLabel: Record<Message['speaker'], string> = {
   user: 'You',
@@ -459,6 +470,11 @@ export const App: React.FC<AppProps> = ({ agent, config }) => {
       return;
     }
 
+    const prepared = prepareAgentInput(trimmed, workspaceRoot, {
+      lastIntent: lastToolIntentRef.current,
+      notebookTipsShown: notebookTipsShownRef.current
+    });
+    const imageAttachments = await loadImageAttachments(workspaceRoot, prepared.mentionedFiles);
     const agentMessage: Message = {
       id: `agent-${Date.now()}`,
       speaker: 'agent',
@@ -469,15 +485,11 @@ export const App: React.FC<AppProps> = ({ agent, config }) => {
 
     setInput('');
     setInputCursor(0);
-    dispatch({ type: 'ADD_MESSAGE', message: userMessage });
+    dispatch({ type: 'ADD_MESSAGE', message: { ...userMessage, images: imageAttachments } });
     dispatch({ type: 'ADD_MESSAGE', message: agentMessage });
     dispatch({ type: 'SET_STATUS', status: 'thinking' });
 
-    const convo: Message[] = [...state.messages, userMessage];
-    const prepared = prepareAgentInput(trimmed, workspaceRoot, {
-      lastIntent: lastToolIntentRef.current,
-      notebookTipsShown: notebookTipsShownRef.current
-    });
+    const convo: Message[] = [...state.messages, { ...userMessage, images: imageAttachments }];
     if (prepared.decision.intent === 'conversation') {
       lastToolIntentRef.current = null;
     } else {
@@ -490,7 +502,8 @@ export const App: React.FC<AppProps> = ({ agent, config }) => {
       .filter((msg) => msg.speaker !== 'system')
       .map((msg) => ({
         role: msg.speaker === 'agent' ? 'assistant' : msg.speaker,
-        content: msg.id === userMessage.id ? prepared.content : msg.content
+        content: msg.id === userMessage.id ? prepared.content : msg.content,
+        images: msg.id === userMessage.id ? imageAttachments : msg.images
       }));
 
     let reasoningBuffer = '';
@@ -540,21 +553,76 @@ export const App: React.FC<AppProps> = ({ agent, config }) => {
     try {
       const result = await streamAgentEvents(agentRunner, transcript, handleEvent);
       const reasoning = result.reasoning || reasoningBuffer;
-      const answerText = result.answer || finalText || reasoning;
+      const answerText = result.answer || finalText || '';
       const sections = splitReasoningAndAnswer(answerText);
       if (sections.visible !== undefined) {
         reasoningVisible = sections.visible;
       }
-      const reasoningSection = sections.reasoning || reasoning;
-      const answerSection = sections.answer || answerText || 'All set. Let me know what you need next.';
+      const reasoningSection = (sections.reasoning || reasoning || '').trim();
+      const resolvedActions = result.actions ?? actions;
+      const actionDigest = formatActionDigest(resolvedActions);
+      const actionLines = resolvedActions
+        .filter((a) => a.status === 'success')
+        .map((a) => a.detail?.trim())
+        .filter(Boolean) as string[];
+      const hasActions = resolvedActions.length > 0;
+
+      let modelAnswer = sections.answer?.trim() || answerText?.trim();
+      const lastUserMessage = transcript.slice().reverse().find((m) => m.role === 'user')?.content ?? '';
+      const isGenericAllSet = modelAnswer && /all set\.\s*let me know/i.test(modelAnswer);
+      const isGreeting = /\b(hi|hello|hey|thanks|thank you|how are you)\b/i.test(lastUserMessage);
+      const contaminated = modelAnswer && /ReasoningVisible|Plan:|Actions:/i.test(modelAnswer);
+      const looksLikeDigest = modelAnswer && /completed actions/i.test(modelAnswer);
+      if (contaminated) {
+        modelAnswer = '';
+      }
+
+      if (!modelAnswer || looksLikeDigest) {
+        try {
+          const summary = await agentRunner.summarize(transcript, {
+            actions: actionDigest,
+            fallbackReasoning: reasoningSection,
+            lastUser: lastUserMessage
+          });
+          modelAnswer = summary.text?.trim() || '';
+        } catch {
+          modelAnswer = '';
+        }
+      }
+
+      if (!hasActions && (!modelAnswer || isGenericAllSet)) {
+        if (/\b(thanks|thank you)\b/i.test(lastUserMessage)) {
+          modelAnswer = 'You’re welcome!';
+        } else if (/\b(how are you)\b/i.test(lastUserMessage)) {
+          modelAnswer = 'I’m doing well—ready to help. How can I assist?';
+        } else if (isGreeting) {
+          modelAnswer = 'Hi there! What can I help you with?';
+        } else if (!modelAnswer) {
+          modelAnswer = lastUserMessage ? `Got it: ${lastUserMessage}` : 'How can I help?';
+        }
+      }
+
+      let combinedAnswer = modelAnswer?.trim() || '';
+      if (!combinedAnswer) {
+        if (hasActions && actionLines.length) {
+          combinedAnswer = `Here’s what I found:\n- ${actionLines.join('\n- ')}`;
+        } else if (hasActions && actionDigest) {
+          combinedAnswer = actionDigest;
+        } else {
+          combinedAnswer = modelAnswer || (lastUserMessage ? `Got it: ${lastUserMessage}` : 'I’m here whenever you’re ready.');
+        }
+      }
+      combinedAnswer = stripStructuredNoise(combinedAnswer);
+
       const showReasoningFlag =
-        reasoningVisible ?? result.showReasoning ?? sections.visible ?? true;
+        (reasoningVisible ?? result.showReasoning ?? sections.visible ?? false) &&
+        Boolean(reasoningSection && reasoningSection.trim().length > 0);
       reasoningVisible = showReasoningFlag;
       patchMessage({
-        content: answerSection,
+        content: combinedAnswer,
         reasoning: reasoningSection,
-        answer: answerSection,
-        actions: result.actions,
+        answer: combinedAnswer,
+        actions: resolvedActions,
         showReasoning: showReasoningFlag,
         status: 'complete',
         timestamp: new Date().toLocaleTimeString()
@@ -748,12 +816,22 @@ const MessageCard: React.FC<{ message: Message }> = ({ message }) => {
   const answer = message.answer?.trim();
   const actions = message.actions ?? [];
 
-  const shouldShowReasoning = message.showReasoning !== false && reasoning;
+  const shouldShowReasoning = message.showReasoning !== false && reasoning && message.status !== 'pending';
+  const showPlaceholder = message.status === 'pending' && message.showReasoning !== false;
+  const activitySummary = useMemo(() => {
+    const running = actions.find((a) => a.status === 'running');
+    if (running?.detail) return running.detail;
+    if (running?.name) return running.name.replace(/_/g, ' ');
+    return 'Working…';
+  }, [actions]);
 
   if (shouldShowReasoning) {
     const reasoningLines =
       renderMultilineText(reasoning, { color: '#949494', dim: false, italic: true }) ?? [];
     rows.push(...reasoningLines);
+  }
+  if (!shouldShowReasoning && showPlaceholder) {
+    rows.push(<ShimmerLine label={activitySummary} />);
   }
   if (actions.length > 0) {
     rows.push(<Text dimColor>Actions Taken</Text>);
@@ -802,6 +880,23 @@ const Bubble = ({ rows, accent }: { rows: React.ReactNode[]; accent: string }) =
     })}
   </Box>
 );
+
+const shimmerFrames = ['   ', '.  ', '.. ', '...', ' ..', '  .'];
+const ShimmerLine: React.FC<{ label: string }> = ({ label }) => {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setIndex((prev) => (prev + 1) % shimmerFrames.length);
+    }, 140);
+    return () => clearInterval(id);
+  }, []);
+  const dots = shimmerFrames[index];
+  return (
+    <Text dimColor>
+      • {label || 'Working'} {dots}
+    </Text>
+  );
+};
 
 const PATH_FILE_EXTENSIONS = [
   'md',
@@ -1435,7 +1530,15 @@ function ComposerInput({
   const isActive = focus && !disabled;
 
   const safeValue = useMemo(() => sanitizeComposerText(value), [value]);
-  const safeCursor = Math.min(Math.max(cursor, 0), safeValue.length);
+  const safeCursorProp = Math.min(Math.max(cursor, 0), safeValue.length);
+
+  const valueRef = useRef(safeValue);
+  const cursorRef = useRef(safeCursorProp);
+  const effectiveCursorProp = isActive ? cursorRef.current ?? safeCursorProp : safeCursorProp;
+  const renderCursor = useMemo(
+    () => Math.min(Math.max(effectiveCursorProp ?? 0, 0), safeValue.length),
+    [effectiveCursorProp, safeValue.length]
+  );
 
   useEffect(() => {
     if (safeValue !== value) {
@@ -1443,14 +1546,14 @@ function ComposerInput({
     }
   }, [safeValue, value, onChange]);
 
-  const valueRef = useRef(safeValue);
-  const cursorRef = useRef(safeCursor);
   useEffect(() => {
     valueRef.current = safeValue;
   }, [safeValue]);
   useEffect(() => {
-    cursorRef.current = safeCursor;
-  }, [safeCursor]);
+    if (!isActive) {
+      cursorRef.current = safeCursorProp;
+    }
+  }, [isActive, safeCursorProp]);
 
   const getLiveValue = useCallback(() => valueRef.current, []);
   const getLiveCursor = useCallback(() => {
@@ -1465,8 +1568,8 @@ function ComposerInput({
   }, [width]);
 
   const composerView = useMemo(
-    () => renderComposerView(safeValue, safeCursor, width),
-    [safeValue, safeCursor, width]
+    () => renderComposerView(safeValue, renderCursor, width),
+    [safeValue, renderCursor, width]
   );
   const displayLines = composerView.displayLines;
   const displayLinesRef = useRef(displayLines);
@@ -1695,7 +1798,7 @@ function ComposerInput({
     [highlightMentions, mentionRanges, safeValue]
   );
 
-  const clampedCursor = safeCursor;
+  const clampedCursor = renderCursor;
 
   const linesToRender = composerView.visibleLines.length
     ? composerView.visibleLines
@@ -1787,3 +1890,7 @@ const openDirectory = (dir: string) => {
   }
   child.unref();
 };
+
+export { Transcript, MessageCard };
+// Expose ComposerInput for testing
+export const __private__ = { ComposerInput };

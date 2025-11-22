@@ -32,6 +32,7 @@ export interface Message {
   answer?: string;
   actions?: MessageAction[];
   showReasoning?: boolean;
+  images?: import('../utils/images.js').ImageAttachment[];
 }
 
 export interface SessionState {

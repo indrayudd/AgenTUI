@@ -3,23 +3,28 @@
   "version": "0.1.0",
   "description": "Terminal chat TUI powered by LangChain deep agents",
   "type": "module",
-  "main": "dist/cli.js",
+  "main": "dist/src/cli.js",
+  "bin": {
+    "agentui": "./bin/agentui.cjs"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "dev": "tsx src/cli.tsx",
     "agent": "tsx src/agent-cli.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/cli.js",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "start": "node dist/src/cli.js",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "bin:set": "node scripts/set-command-prefix.mjs",
     "notebook:test": "tsx scripts/notebook-smoketest.ts",
     "agent:smoke": "tsx scripts/agent-smoketest.ts",
     "agent:testfs": "tsx scripts/test-filesystem.ts",
+    "test:agentui-bin": "node scripts/test-agentui-bin.mjs",
     "test:watch": "vitest"
   },
   "keywords": [

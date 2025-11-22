@@ -2,11 +2,13 @@ import path from 'path';
 import os from 'os';
 import crypto from 'node:crypto';
 import { promises as fs } from 'fs';
+import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { tool } from 'langchain';
 import { z } from 'zod';
 import { requireWorkspacePath } from '../path/resolver.js';
 import { analyzeImagePath } from './vision.js';
+import { fileURLToPath } from 'url';
 
 const PYTHON_BIN = process.env.AGEN_TUI_PYTHON ?? 'python3';
 const AUTO_ANALYZE_IMAGES = process.env.AGEN_TUI_AUTO_ANALYZE_IMAGES === '1';
@@ -49,8 +51,24 @@ type RunnerResult = {
   message?: string;
 };
 
+const packageRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
+
+const resolveRunnerScript = (workspaceRoot: string) => {
+  const workspaceRunner = path.join(workspaceRoot, 'scripts/ipynb/runner.py');
+  if (existsSync(workspaceRunner)) {
+    return workspaceRunner;
+  }
+  const packagedRunner = path.join(packageRoot, 'scripts/ipynb/runner.py');
+  if (existsSync(packagedRunner)) {
+    return packagedRunner;
+  }
+  throw new Error(
+    'Notebook runner script is missing. Ensure scripts/ipynb/runner.py exists in the workspace or package.'
+  );
+};
+
 const runRunner = async (workspaceRoot: string, args: string[]): Promise<RunnerResult> => {
-  const scriptPath = path.join(workspaceRoot, 'scripts/ipynb/runner.py');
+  const scriptPath = resolveRunnerScript(workspaceRoot);
   return new Promise<RunnerResult>((resolve, reject) => {
     const child = spawn(PYTHON_BIN, [scriptPath, ...args], { cwd: workspaceRoot });
     let stdout = '';

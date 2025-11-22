@@ -10,8 +10,9 @@ Codex-inspired terminal client that wraps LangChain Deep Agents. The app exposes
 - **Intent-aware routing** that classifies each prompt as conversational, filesystem, notebook, or mixed so the agent responds naturally when no tools are needed and plans multi-step work when they are.
 - **Notebook IQ** – `ipynb_create`, `ipynb_patch`, `ipynb_run`, `ipynb_analyze`, and the new `ipynb_artifacts` tool let the agent create, edit, execute, summarize, and look up artifact locations without manual spelunking. See `docs/notebook-pipeline.md`.
 - **Responsive composer** – the input box now buffers keystrokes locally (no more overwritten characters), expands up to 6 lines, scrolls internally when you paste large blocks of text, sanitizes clipboard junk (CR/LF/tabs) so borders never explode, and is backed by a deterministic `renderComposerView(value, cursor, width)` helper so layout/viewport changes are snapshot-tested.
+- **Global `agentui` binary** – after building once, run `npm install -g .` (or `npm link`) to expose an `agentui` command that launches the TUI from whatever directory you invoke it in. Change the prefix later with `npm run bin:set -- <new-name>` and re-link.
 - **Inline CLI mode** via `npm run agent -- "prompt"` for deterministic testing.
-- **Reasoning visibility control**: the model emits `ReasoningVisible: yes|no` before every response so greetings stay clean while multi-step/tool work streams a dim gray plan.
+- **Reasoning visibility control**: the model emits `ReasoningVisible: yes|no` before every response; reasoning is buffered until the flag arrives so trivial replies stay clean and multi-step/tool work streams a dim gray plan without flicker.
 - **Natural-language action summaries** so the Actions list reads like “Listed / (23 entries)” instead of raw JSON blobs.
 - **Reasoning → Actions → Answer parity** between the TUI and CLI: both surfaces stream plan updates, normalized tool summaries, and a final conversational answer sourced from the same structured event pipeline.
 - **Robust path highlighting** keeps entire filenames/paths cyan (even when the agent returns bare filenames like `sprint1_plan.md`) without lighting up random sentences.
@@ -30,6 +31,30 @@ Build/run the compiled binary with:
 ```bash
 npm run build && npm start
 ```
+
+### Global CLI command
+
+1. Build the project so `dist/cli.js` exists:
+   ```bash
+   npm run build
+   ```
+2. Link or install globally (either works):
+   ```bash
+   npm install -g .   # or: npm link
+   ```
+3. From any directory, run:
+   ```bash
+   agentui
+   ```
+   The TUI will start with that directory as its working directory.
+
+Need a different prefix? Run:
+```bash
+npm run bin:set -- my-new-prefix
+npm run build
+npm install -g .
+```
+The script updates `package.json`'s `bin` entry so the next global install exposes the new command name.
 
 ## Environment
 
@@ -52,6 +77,8 @@ OPENAI_MODEL=gpt-5-mini # optional override
 | `npm run agent -- "prompt"` | Fire a single prompt without launching the TUI (see below).
 | `npm run agent:smoke` | Runs six representative prompts (greeting, listing, summary, notebook creation, notebook summarize, patch+run) via the CLI for a quick end-to-end smoke test. Retries each prompt once if the model hiccups. |
 | `npm run agent:testfs` | Filesystem regression harness (resets `tmp/fs-spec`, then exercises list/copy/read/glob/delete prompts against the real workspace). |
+| `npm run bin:set -- <name>` | Update the global command prefix (default `agentui`). Re-run `npm run build` + `npm install -g .` afterwards. |
+| `npm run test:agentui-bin` | Self-test for the global binary. Requires a fresh `npm run build`. |
 
 ### Inline CLI examples
 
@@ -78,6 +105,7 @@ npm run agent -- "delete @README.backup"               # custom delete tool
 - Keep a second terminal running CLI prompts for iterative development. Example: `npm run agent -- "list the files in @tmp/"`.
 - For filesystem-heavy changes, run `npm run agent:testfs` before and after edits to ensure list/copy/read/delete flows continue to work.
 - `npm run agent:smoke` is useful after touching prompt routing or notebook behavior—it now exercises greeting, listing, notebook summarization, notebook creation, and a patch → run → artifact listing workflow. See [`docs/notebook-pipeline.md`](docs/notebook-pipeline.md) for the full create → patch → run → summarize → artifacts diagram.
+- Want the TUI available as a global binary? Run `npm run build && npm install -g .`, then launch it anywhere via `agentui`. Use `npm run bin:set -- <prefix>` before linking if you want a different command name.
 
 ## Filesystem Shortcuts
 
@@ -137,6 +165,7 @@ The UI and CLI render these events as the familiar **Reasoning → Actions → A
 4. Filesystem regression: `npm run agent:testfs` to exercise list/copy/read/glob/delete flows against the real `tmp/fs-spec` fixture whenever filesystem changes are introduced.
 5. Launch `npm run dev`, exercise slash commands (`/model`, `/new`, `/undo`, `/files`), and watch the dim-gray Reasoning block appear only when meaningful plan output exists.
 6. Composer manual QA: with the TUI focused on the composer, paste a wall of text (≥8 lines), verify only 6 lines are visible with `⋮` glyphs above/below when clipped, and use arrow keys across wrapped lines to confirm the cursor never bleeds outside the border.
+7. Global launcher: after `npm run build`, run `npm run test:agentui-bin` to confirm the `agentui` shim respects the invoking directory. Then `npm install -g .` (or `npm link`) and launch `agentui` from a throwaway directory to double-check manually.
 
 ## Notes
 

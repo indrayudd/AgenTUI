@@ -30,4 +30,26 @@ describe('describeToolAction', () => {
     expect(detail).toContain('**/sprint5*');
     expect(detail).toContain('/Users/test/project');
   });
+
+  it('counts listed entries from tool output', () => {
+    const output = `Listing for /tmp:\ndir  /tmp/folder\nfile /tmp/file.txt (12B)\n`;
+    const detail = describeToolAction(
+      'list_path',
+      { input: JSON.stringify({ targetPath: '/tmp' }) },
+      output,
+      'success'
+    );
+    expect(detail).toContain('(2 entries)');
+  });
+
+  it('counts listed entries from single-line outputs', () => {
+    const output = 'Listing for /tmp: dir /tmp/folder file /tmp/file.txt (12B)';
+    const detail = describeToolAction(
+      'list_path',
+      { input: JSON.stringify({ targetPath: '/tmp' }) },
+      output,
+      'success'
+    );
+    expect(detail).toContain('(2 entries)');
+  });
 });

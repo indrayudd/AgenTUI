@@ -4,6 +4,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { AppConfig } from '../config/index.js';
 import type { UsageMetadata } from '../state/usage.js';
 import { buildTools } from '../tools/index.js';
+import type { ImageAttachment } from '../utils/images.js';
 
 const parsedLimit = Number(process.env.AGEN_TUI_RECURSION_LIMIT ?? '100');
 const DEFAULT_RECURSION_LIMIT = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100;
@@ -12,6 +13,7 @@ export type AgentRole = 'user' | 'assistant' | 'system';
 export interface AgentMessage {
   role: AgentRole;
   content: string;
+  images?: ImageAttachment[];
 }
 
 export interface AgentResult {
@@ -27,6 +29,10 @@ export interface AgentRunner {
     messages: AgentMessage[],
     options?: Parameters<ReturnType<typeof createDeepAgent>['streamEvents']>[2]
   ) => AsyncIterable<any>;
+  summarize: (
+    messages: AgentMessage[],
+    context: { actions?: string; fallbackReasoning?: string; lastUser?: string }
+  ) => Promise<AgentResult>;
 }
 
 export const createAgentRunner = (config: AppConfig): AgentRunner => {
@@ -49,8 +55,25 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
     tools: customTools
   });
 
+  const toDeepMessage = (message: AgentMessage) => {
+    if (message.images && message.images.length > 0) {
+      const parts: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> = [];
+      if (message.content && message.content.trim().length) {
+        parts.push({ type: 'text', text: message.content });
+      }
+      message.images.forEach((img) => {
+        parts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
+      });
+      return { role: message.role, content: parts };
+    }
+    return message;
+  };
+
   const run = async (messages: AgentMessage[]): Promise<AgentResult> => {
-    const result = await agent.invoke({ messages }, { recursionLimit: DEFAULT_RECURSION_LIMIT });
+    const result = await agent.invoke(
+      { messages: messages.map(toDeepMessage) },
+      { recursionLimit: DEFAULT_RECURSION_LIMIT }
+    );
     const finalMessage = result.messages[result.messages.length - 1];
     let text = '';
     const content = finalMessage?.content;
@@ -76,12 +99,33 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
     return { text, finalMessage, usage, model: actualModel };
   };
 
-  const stream = (
-    messages: AgentMessage[],
-    options?: Parameters<typeof agent.streamEvents>[2]
-  ) => agent.streamEvents({ messages }, { recursionLimit: DEFAULT_RECURSION_LIMIT }, options);
+  const stream = (messages: AgentMessage[], options?: Parameters<typeof agent.streamEvents>[2]) =>
+    agent.streamEvents(
+      { messages: messages.map(toDeepMessage) },
+      { recursionLimit: DEFAULT_RECURSION_LIMIT },
+      options
+    );
 
-  return { run, stream };
+  const summarize = async (
+    messages: AgentMessage[],
+    context: { actions?: string; fallbackReasoning?: string; lastUser?: string }
+  ): Promise<AgentResult> => {
+    const lastUserText = context.lastUser ?? messages.slice().reverse().find((m) => m.role === 'user')?.content ?? '';
+    const prompt: AgentMessage[] = [
+      {
+        role: 'system',
+        content:
+          'You are a concise, friendly assistant. Respond conversationally. If actions/results are provided, weave them into a one-sentence/short paragraph answer. Do NOT repeat raw action logs or headings. Avoid canned phrases like "All set". If no actions exist, answer the user plainly.'
+      },
+      {
+        role: 'user',
+        content: `Request: ${lastUserText}\nActions/Results: ${context.actions ?? 'none'}\nNotes: ${context.fallbackReasoning ?? ''}`
+      }
+    ];
+    return run(prompt);
+  };
+
+  return { run, stream, summarize };
 };
 
 const extractModelIdentifier = (message?: BaseMessage | null): string | undefined => {

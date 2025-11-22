@@ -13,10 +13,10 @@ export const formatActionDigest = (actions: MessageAction[]) => {
     .map((action) => {
       const detail = action.detail?.trim();
       const label = detail && detail.length ? detail : action.name.replace(/_/g, ' ');
-      return label;
+      return `- ${label}`;
     });
   if (!summaries.length) {
     return '';
   }
-  return `Completed actions:\n${summaries.slice(-5).join('\n')}`;
+  return `Completed actions (latest first):\n${summaries.slice(-5).join('\n')}`;
 };

@@ -14,6 +14,7 @@ export interface PreparedAgentInput {
   content: string;
   decision: RouteDecision;
   includedNotebookTips: boolean;
+  mentionedFiles: string[];
 }
 
 export interface PrepareAgentInputOptions {
@@ -65,5 +66,10 @@ export const prepareAgentInput = (
       ? `${normalized}\n\n${metadataBlocks.join('\n\n')}`
       : normalized;
 
-  return { content, decision, includedNotebookTips: shouldIncludeNotebookTips };
+  return {
+    content,
+    decision,
+    includedNotebookTips: shouldIncludeNotebookTips,
+    mentionedFiles: mentionMetadata?.mentioned_files ?? []
+  };
 };

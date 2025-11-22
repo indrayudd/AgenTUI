@@ -119,8 +119,28 @@ const summarizeListing = (output: unknown) => {
   if (typeof output !== 'string') return '';
   const lines = output.split('\n');
   if (!lines.length) return '';
-  const entries = lines.slice(1).filter((line) => line.trim().length && !/^directory is empty/i.test(line));
-  return `${entries.length || 0} entr${entries.length === 1 ? 'y' : 'ies'}`;
+  const entries = lines
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line.length) return false;
+      if (/^listing for /i.test(line)) return false;
+      if (/^directory is empty/i.test(line)) return true;
+      return true;
+    });
+  // Prefer explicit count if present.
+  const countMatch = /\b(\d+)\s+entr(?:y|ies)\b/i.exec(output);
+  if (countMatch) {
+    const n = Number(countMatch[1]);
+    return `${n} entr${n === 1 ? 'y' : 'ies'}`;
+  }
+  let entryCount = entries.filter((line) => !/^directory is empty/i.test(line)).length;
+  if (entryCount === 0 && !/directory is empty/i.test(output)) {
+    const markerMatches = output.match(/(?:^|\s)(dir|file|other)\s+[^\s]+/gi);
+    if (markerMatches?.length) {
+      entryCount = markerMatches.length;
+    }
+  }
+  return `${entryCount} entr${entryCount === 1 ? 'y' : 'ies'}`;
 };
 
 const summarizeRead = (output: unknown) => {
@@ -350,9 +370,21 @@ const summarizers: Record<
     }
     const matches = summarizeMatches(output);
     const depth = payload?.maxDepth ?? 0;
+    let sample = '';
+    if (typeof output === 'string') {
+      const lines = output
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length && !/^Listing for /i.test(line) && !/match/i.test(line));
+      if (lines.length) {
+        const shown = lines.slice(0, 3).join(', ');
+        const more = lines.length > 3 ? `, … ${lines.length - 3} more` : '';
+        sample = ` → ${shown}${more}`;
+      }
+    }
     return `Glob "${pattern ?? ''}" under ${formatPath(base)} (depth ${depth}, ${matches} match${
       matches === 1 ? '' : 'es'
-    })`;
+    })${sample}`;
   },
   diff_paths: ({ input, output }) => {
     const payload = normalizeToolInput<{ leftPath?: string; rightPath?: string; left_path?: string; right_path?: string }>(input);

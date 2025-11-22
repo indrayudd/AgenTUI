@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
 export const DEFAULT_SYSTEM_PROMPT = `You are AgenTUI, a focused terminal assistant that mirrors Codex/Gemini behavior.

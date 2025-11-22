@@ -2,7 +2,10 @@ import type { AgentMessage, AgentRunner } from './index.js';
 import type { MessageAction } from '../state/session.js';
 import type { TokenUsage } from '../state/usage.js';
 import { formatActionDigest } from '../utils/actions.js';
-import { stripReasoningVisibilityLine } from '../utils/messages.js';
+import {
+  splitReasoningAndAnswer,
+  stripReasoningVisibilityLine
+} from '../utils/messages.js';
 import { describeToolAction } from '../utils/tool-summaries.js';
 import { formatToolDetail } from '../utils/text.js';
 
@@ -75,7 +78,67 @@ const extractUsageFromChunk = (chunk: any): TokenUsage | null => {
 };
 
 const VISIBILITY_REGEX = /ReasoningVisible:\s*(yes|no)/i;
-const ACTIONS_REGEX = /Actions:\s*/i;
+const STRUCTURED_SECTION_REGEX = /(Actions:|Answer:)/i;
+const TODO_REGEX = /"update"\s*:\s*{[^}]*"content"\s*:\s*"([^"]+)"[^}]*}/i;
+const NORMALIZE_WS = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+const pruneAnswerFromReasoning = (reasoning: string, answer: string) => {
+  if (!reasoning || !answer) return reasoning;
+  const normalizedAnswer = NORMALIZE_WS(answer);
+  if (!normalizedAnswer) return reasoning;
+  let pruned = reasoning;
+  if (NORMALIZE_WS(reasoning).includes(normalizedAnswer)) {
+    const escaped = answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    pruned = pruned.replace(new RegExp(escaped, 'g'), '').trim();
+  }
+  const answerLines = answer
+    .split('\n')
+    .map(NORMALIZE_WS)
+    .filter(Boolean);
+  const reasoningLines = pruned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => {
+      const norm = NORMALIZE_WS(line);
+      if (!norm) return false;
+      return !answerLines.includes(norm);
+    });
+  return reasoningLines.join('\n').trim();
+};
+
+const formatPlanText = (raw: unknown): string => {
+  if (!raw) return '';
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const maybeUpdate = (parsed as any).update?.content;
+        if (typeof maybeUpdate === 'string') return maybeUpdate;
+      }
+    } catch {
+      // ignore
+    }
+    const match = TODO_REGEX.exec(raw);
+    if (match?.[1]) return match[1];
+    return raw;
+  }
+  try {
+    const stringified = JSON.stringify(raw);
+    const match = TODO_REGEX.exec(stringified);
+    if (match?.[1]) return match[1];
+    return stringified;
+  } catch {
+    return String(raw);
+  }
+};
+
+const unwrapToolOutput = (output: unknown) => {
+  if (output && typeof output === 'object' && 'content' in (output as Record<string, unknown>)) {
+    const content = (output as { content?: unknown }).content;
+    if (typeof content === 'string') return content;
+  }
+  return output;
+};
 
 export const streamAgentEvents = async (
   runner: AgentRunner,
@@ -92,12 +155,36 @@ export const streamAgentEvents = async (
   const planToolRunIds = new Set<string>();
   const stream = runner.stream(messages);
   let visibilityBuffer = '';
+  let pendingReasoning = '';
+  const modelTextParts: string[] = [];
+  const seenAnswerChunks: string[] = [];
+  let lastPlanText = '';
 
-  const truncateAfterActions = (value: string) => {
-    const idx = value.search(ACTIONS_REGEX);
+  const recordModelText = (value: string) => {
+    if (!value) return;
+    const cleaned = stripReasoningVisibilityLine(value).text;
+    if (cleaned && cleaned.trim().length > 0) {
+      modelTextParts.push(cleaned);
+    }
+  };
+
+  const truncatePlanText = (value: string) => {
+    const idx = value.search(STRUCTURED_SECTION_REGEX);
     if (idx === -1) return value;
     return value.slice(0, idx).trim();
   };
+
+  const emitPlan = (text: string, source: PlanSource) => {
+    const cleaned = truncatePlanText(text.trim());
+    if (NORMALIZE_WS(cleaned) === NORMALIZE_WS(lastPlanText)) {
+      return;
+    }
+    lastPlanText = cleaned;
+    state.reasoning = cleaned;
+    onEvent({ kind: 'plan', text: state.reasoning, source });
+  };
+
+  const flushPendingPlan = (text: string) => emitPlan(text, 'llm');
 
   const consumeVisibilitySignal = (chunkText: string): string => {
     if (state.showReasoning !== undefined) {
@@ -114,8 +201,16 @@ export const streamAgentEvents = async (
     const after = visibilityBuffer
       .slice(match.index + match[0].length)
       .replace(/^\s*/, '');
+    pendingReasoning += `${before}${after}`;
     visibilityBuffer = '';
-    return before + after;
+    if (state.showReasoning) {
+      const toFlush = pendingReasoning;
+      pendingReasoning = '';
+      flushPendingPlan(toFlush);
+    } else {
+      pendingReasoning = '';
+    }
+    return '';
   };
 
   for await (const raw of stream) {
@@ -123,40 +218,37 @@ export const streamAgentEvents = async (
     if (event.event === 'on_chat_model_stream') {
       let chunkText = normalizeContent(getChunkContent(event?.data?.chunk));
       if (!chunkText) continue;
-      if (state.showReasoning === undefined) {
-        chunkText = consumeVisibilitySignal(chunkText);
-      }
-      if (!chunkText) continue;
-      state.reasoning = truncateAfterActions(
-        `${state.reasoning}${chunkText}`.trim()
-      );
-      if (state.showReasoning !== false) {
-        onEvent({ kind: 'plan', text: state.reasoning, source: 'llm' });
+      recordModelText(chunkText);
+      chunkText = consumeVisibilitySignal(chunkText);
+      if (state.showReasoning) {
+        if (!chunkText) continue;
+        emitPlan(`${state.reasoning}${chunkText}`, 'llm');
       }
     } else if (event.event === 'on_chat_model_end') {
       const chunk = event?.data?.output;
       let chunkText = normalizeContent(getChunkContent(chunk));
       if (chunkText) {
-        if (state.showReasoning === undefined) {
-          visibilityBuffer += chunkText;
-          const match = VISIBILITY_REGEX.exec(visibilityBuffer);
-          if (match) {
-            state.showReasoning = match[1].toLowerCase() === 'yes';
-            onEvent({ kind: 'reasoning_visibility', visible: state.showReasoning });
-            const before = visibilityBuffer.slice(0, match.index);
-            const after = visibilityBuffer
-              .slice(match.index + match[0].length)
-              .replace(/^\s*/, '');
-            chunkText = `${before}${after}`;
-            visibilityBuffer = '';
-          } else {
-            chunkText = visibilityBuffer;
+        recordModelText(chunkText);
+        chunkText = consumeVisibilitySignal(chunkText);
+        if (state.showReasoning) {
+          if (chunkText) {
+            emitPlan(`${state.reasoning}${chunkText}`, 'llm');
+            seenAnswerChunks.push(chunkText);
           }
+        } else {
+          pendingReasoning += chunkText;
         }
-        state.reasoning = truncateAfterActions(
-          `${state.reasoning}${chunkText}`.trim()
+      }
+      if (state.showReasoning === undefined) {
+        state.showReasoning = false;
+        onEvent({ kind: 'reasoning_visibility', visible: false });
+        pendingReasoning = '';
+      }
+      if (state.showReasoning && pendingReasoning) {
+        state.reasoning = truncatePlanText(
+          `${state.reasoning}${pendingReasoning}`.trim()
         );
-        state.answer = chunkText;
+        pendingReasoning = '';
       }
       const usage = extractUsageFromChunk(chunk);
       if (usage) {
@@ -193,15 +285,13 @@ export const streamAgentEvents = async (
       const runId = event?.run_id ?? '';
       if (planToolRunIds.has(runId)) {
         planToolRunIds.delete(runId);
-        const planText = describeToolAction(
-          'write_todos',
-          event?.data?.input,
-          formatToolDetail(event?.data?.output),
-          'success'
-        );
-        if (planText) {
-          state.reasoning = planText;
-          onEvent({ kind: 'plan', text: state.reasoning.trim(), source: 'todos' });
+        const rawOutput = formatToolDetail(event?.data?.output);
+        const formatted = formatPlanText(rawOutput);
+        if (formatted) {
+          state.reasoning = formatted;
+          if (state.showReasoning !== false) {
+            onEvent({ kind: 'plan', text: state.reasoning.trim(), source: 'todos' });
+          }
         }
         continue;
       }
@@ -210,7 +300,7 @@ export const streamAgentEvents = async (
       const detail = describeToolAction(
         existing?.name ?? event?.name,
         inputMeta,
-        formatToolDetail(event?.data?.output),
+        unwrapToolOutput(event?.data?.output),
         'success'
       );
       traceLog('tool_end', {
@@ -241,7 +331,7 @@ export const streamAgentEvents = async (
       const detail = describeToolAction(
         existing?.name ?? event?.name,
         inputMeta,
-        formatToolDetail(event?.data ?? event?.error),
+        unwrapToolOutput(event?.data ?? event?.error),
         'error'
       );
       traceLog('tool_error', {
@@ -264,27 +354,45 @@ export const streamAgentEvents = async (
     }
   }
 
+  const combinedModelText = modelTextParts.join('');
+  const sections = splitReasoningAndAnswer(combinedModelText);
+  if (sections.visible !== undefined && state.showReasoning === undefined) {
+    state.showReasoning = sections.visible;
+    onEvent({ kind: 'reasoning_visibility', visible: sections.visible });
+  }
+  if (sections.reasoning?.trim()) {
+    state.reasoning = truncatePlanText(sections.reasoning.trim());
+  }
+  const { text: cleanedAnswer } = stripReasoningVisibilityLine(
+    sections.answer?.trim() || seenAnswerChunks.join('').trim() || state.answer || ''
+  );
+  state.answer = cleanedAnswer.trim();
+  if (state.answer.startsWith('Plan:') && seenAnswerChunks.length) {
+    state.answer = seenAnswerChunks.join('').trim();
+  }
+
   if (!state.answer?.trim()) {
     const digest = formatActionDigest(state.actions);
-    if (digest) {
-      state.answer = digest;
-    } else if (state.reasoning.trim()) {
-      state.answer = state.reasoning.trim();
-    } else {
-      state.answer = 'All set. Let me know what you need next.';
+    state.answer = digest || '';
+  }
+
+  state.reasoning = pruneAnswerFromReasoning(state.reasoning, state.answer);
+  const normReasoning = NORMALIZE_WS(state.reasoning);
+  const normAnswer = NORMALIZE_WS(state.answer);
+  const backupAnswer = NORMALIZE_WS(seenAnswerChunks.join(' '));
+  if (normAnswer && (normReasoning === normAnswer || normReasoning.includes(normAnswer))) {
+    state.reasoning = '';
+  } else if (!normAnswer && backupAnswer && (normReasoning === backupAnswer || normReasoning.includes(backupAnswer))) {
+    state.reasoning = '';
+  }
+  if (state.answer && state.reasoning) {
+    const trimmed = state.reasoning.trim().toLowerCase();
+    if (trimmed.startsWith('plan:') && state.reasoning.length < 120 && !/\n/.test(state.reasoning)) {
+      state.reasoning = '';
     }
   }
 
-  const { text: cleanedAnswer, visible } = stripReasoningVisibilityLine(state.answer);
-  if (state.showReasoning === undefined && visible !== undefined) {
-    state.showReasoning = visible;
-    onEvent({ kind: 'reasoning_visibility', visible });
-  }
-  if (state.showReasoning === undefined) {
-    state.showReasoning = true;
-  }
-  state.reasoning = truncateAfterActions(state.reasoning.trim());
-  state.answer = cleanedAnswer.trim();
+  state.reasoning = truncatePlanText(state.reasoning.trim());
   onEvent({ kind: 'answer', text: state.answer });
   return state;
 };
