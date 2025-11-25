@@ -22,6 +22,11 @@ export interface AgentMessage {
   images?: ImageAttachment[];
 }
 
+const supportsVision = (modelId: string) => {
+  const lower = modelId.toLowerCase();
+  return lower.includes('gpt-5') || lower.includes('gpt-4o') || lower.includes('4o-mini');
+};
+
 export interface AgentResult {
   text: string;
   finalMessage?: BaseMessage;
@@ -43,27 +48,32 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
     apiKey: config.openAIApiKey,
     model: config.openAIModel
   });
+  const visionModel =
+    supportsVision(config.openAIModel) && !config.openAIModel.toLowerCase().includes('gpt-5-nano')
+      ? model
+      : new ChatOpenAI({ apiKey: config.openAIApiKey, model: 'gpt-5-nano' });
 
   const workspaceRoot = process.cwd();
   const backend = new FilesystemBackend({
     rootDir: workspaceRoot,
     virtualMode: false
   });
-  const customTools = buildTools(workspaceRoot);
+  const baseTools = buildTools(workspaceRoot);
+  const visionTools = baseTools.filter((tool: any) => tool?.name !== 'analyze_image');
 
-  const makeAgent = () => {
+  const makeAgent = (overrideModel: ChatOpenAI, tools: any[]) => {
     const finalSystemPrompt = `${config.systemPrompt}\n\nIn order to complete the objective that the user asks of you, you have access to a number of standard tools.`;
     const middleware = [
       todoListMiddleware(),
       createFilesystemMiddleware({ backend }),
       createSubAgentMiddleware({
-        defaultModel: model,
-        defaultTools: customTools,
+        defaultModel: overrideModel,
+        defaultTools: tools,
         defaultMiddleware: [
           todoListMiddleware(),
           createFilesystemMiddleware({ backend }),
           summarizationMiddleware({
-            model,
+            model: overrideModel,
             trigger: { tokens: 170_000 },
             keep: { messages: 6 }
           }),
@@ -72,7 +82,7 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
         generalPurposeAgent: true
       }),
       summarizationMiddleware({
-        model,
+        model: overrideModel,
         trigger: { tokens: 170_000 },
         keep: { messages: 6 }
       }),
@@ -80,14 +90,15 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
     ];
 
     return createAgent({
-      model,
+      model: overrideModel,
       systemPrompt: finalSystemPrompt,
-      tools: customTools,
+      tools,
       middleware
     });
   };
 
-  const agent = makeAgent();
+  const agent = makeAgent(model, baseTools);
+  const visionAgent = supportsVision(config.openAIModel) ? agent : makeAgent(visionModel, visionTools);
 
   const toDeepMessage = (message: AgentMessage) => {
     if (message.images && message.images.length > 0) {
@@ -104,8 +115,11 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
   };
 
   const run = async (messages: AgentMessage[]): Promise<AgentResult> => {
-    const result = await agent.invoke(
-      { messages: messages.map(toDeepMessage) },
+    const hasImages = messages.some((m) => m.images && m.images.length > 0);
+    const runner = hasImages ? visionAgent : agent;
+    const deepMessages = messages.map(toDeepMessage) as any;
+    const result = await runner.invoke(
+      { messages: deepMessages },
       { recursionLimit: DEFAULT_RECURSION_LIMIT }
     );
     const finalMessage = result.messages[result.messages.length - 1];
@@ -133,12 +147,16 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
     return { text, finalMessage, usage, model: actualModel };
   };
 
-  const stream = (messages: AgentMessage[], options?: Parameters<typeof agent.streamEvents>[2]) =>
-    agent.streamEvents(
-      { messages: messages.map(toDeepMessage) },
+  const stream = (messages: AgentMessage[], options?: Parameters<typeof agent.streamEvents>[2]) => {
+    const hasImages = messages.some((m) => m.images && m.images.length > 0);
+    const runner = hasImages ? visionAgent : agent;
+    const deepMessages = messages.map(toDeepMessage) as any;
+    return runner.streamEvents(
+      { messages: deepMessages },
       { recursionLimit: DEFAULT_RECURSION_LIMIT },
       options
     );
+  };
 
   const summarize = async (
     messages: AgentMessage[],

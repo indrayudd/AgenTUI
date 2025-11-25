@@ -48,7 +48,7 @@ const envSchema = z.object({
   OPENAI_MODEL: z
     .string()
     .optional()
-    .default('gpt-5-mini'),
+    .default('gpt-4o-mini'),
   SYSTEM_PROMPT: z
     .string()
     .optional()

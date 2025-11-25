@@ -15,8 +15,8 @@ import { getModelContextWindow, getKnownModels } from '../models.js';
 import { parseSlashCommand } from '../commands/index.js';
 import {
   detectMentionContext,
-  formatMentionValue,
-  getMentionRanges
+  getMentionRanges,
+  applyMentionInsertion
 } from './mentions.js';
 import { formatActionDigest } from '../utils/actions.js';
 import {
@@ -347,17 +347,12 @@ export const App: React.FC<AppProps> = ({ agent, config }) => {
   const insertMentionSelection = useCallback(
     (valueToInsert: string) => {
       if (!mentionContext) return;
-      const formatted = formatMentionValue(valueToInsert);
-      const before = input.slice(0, mentionContext.start);
-      const after = input.slice(inputCursor);
-      const insertion = `@${formatted} `;
-      const nextValue = `${before}${insertion}${after}`;
-      const nextCursor = before.length + insertion.length;
+      const { nextValue, nextCursor } = applyMentionInsertion(input, mentionContext, valueToInsert);
       setInput(nextValue);
       setInputCursor(nextCursor);
       setMentionSuggestionIndex(0);
     },
-    [input, inputCursor, mentionContext]
+    [input, mentionContext]
   );
 
   useInput(
@@ -1534,10 +1529,9 @@ function ComposerInput({
 
   const valueRef = useRef(safeValue);
   const cursorRef = useRef(safeCursorProp);
-  const effectiveCursorProp = isActive ? cursorRef.current ?? safeCursorProp : safeCursorProp;
   const renderCursor = useMemo(
-    () => Math.min(Math.max(effectiveCursorProp ?? 0, 0), safeValue.length),
-    [effectiveCursorProp, safeValue.length]
+    () => Math.min(Math.max(safeCursorProp ?? 0, 0), safeValue.length),
+    [safeCursorProp, safeValue.length]
   );
 
   useEffect(() => {
@@ -1550,10 +1544,8 @@ function ComposerInput({
     valueRef.current = safeValue;
   }, [safeValue]);
   useEffect(() => {
-    if (!isActive) {
-      cursorRef.current = safeCursorProp;
-    }
-  }, [isActive, safeCursorProp]);
+    cursorRef.current = safeCursorProp;
+  }, [safeCursorProp]);
 
   const getLiveValue = useCallback(() => valueRef.current, []);
   const getLiveCursor = useCallback(() => {

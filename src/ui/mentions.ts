@@ -9,6 +9,9 @@ export type MentionContext = {
 export type MentionRange = { start: number; end: number };
 
 const MENTION_REGEX = /@(?:"[^"\n]+"|[A-Za-z0-9@._/-]+)/g;
+const stripMentionToken = (token: string) => {
+  return token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
+};
 
 export const detectMentionContext = (text: string, cursor: number): MentionContext | null => {
   let start = -1;
@@ -37,10 +40,6 @@ export const detectMentionContext = (text: string, cursor: number): MentionConte
     return null;
   }
   return { start, query };
-};
-
-const stripMentionToken = (token: string) => {
-  return token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
 };
 
 export const formatMentionValue = (value: string) => {
@@ -89,4 +88,19 @@ export const extractMentionMetadata = (text: string, root: string) => {
 
 export const appendMentionMetadata = (content: string, metadata: { mentioned_files: string[] }) => {
   return `${content}\n\n[Mentioned files]\n${metadata.mentioned_files.map((file) => `- ${file}`).join('\n')}`;
+};
+
+export const applyMentionInsertion = (
+  input: string,
+  context: MentionContext,
+  valueToInsert: string
+): { nextValue: string; nextCursor: number } => {
+  const formatted = formatMentionValue(valueToInsert);
+  const before = input.slice(0, context.start);
+  const tokenEnd = context.start + 1 + (context.query?.length ?? 0);
+  const after = input.slice(tokenEnd);
+  const insertion = `@${formatted} `;
+  const nextValue = `${before}${insertion}${after}`;
+  const nextCursor = before.length + insertion.length;
+  return { nextValue, nextCursor };
 };

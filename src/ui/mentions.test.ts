@@ -1,13 +1,14 @@
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import {
-  appendMentionMetadata,
-  detectMentionContext,
-  extractMentionMetadata,
-  formatMentionValue,
-  getMentionRanges,
-  replaceMentionsWithPaths
-} from './mentions.js';
+  import {
+    appendMentionMetadata,
+    detectMentionContext,
+    extractMentionMetadata,
+    formatMentionValue,
+    getMentionRanges,
+    replaceMentionsWithPaths,
+    applyMentionInsertion
+  } from './mentions.js';
 
 describe('mentions helpers', () => {
   it('detects mention context after @', () => {
@@ -66,5 +67,13 @@ describe('mentions helpers', () => {
   it('replaces mentions with absolute paths', () => {
     const replaced = replaceMentionsWithPaths('Open @README.md and visit @src/', '/repo');
     expect(replaced).toBe('Open /repo/README.md and visit /repo/src/');
+  });
+
+  it('applies mention insertion and cursor lands after path', () => {
+    const ctx = { start: 5, query: 'tmp' };
+    const input = 'open @tmp more';
+    const { nextValue, nextCursor } = applyMentionInsertion(input, ctx, 'tmp/dir');
+    expect(nextValue).toBe('open @tmp/dir  more');
+    expect(nextCursor).toBe('open @tmp/dir '.length);
   });
 });
