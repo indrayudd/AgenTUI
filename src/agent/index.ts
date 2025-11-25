@@ -1,5 +1,11 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { createDeepAgent, FilesystemBackend } from 'deepagents';
+import { createAgent, todoListMiddleware, summarizationMiddleware } from 'langchain';
+import {
+  createFilesystemMiddleware,
+  createSubAgentMiddleware,
+  createPatchToolCallsMiddleware,
+  FilesystemBackend
+} from 'deepagents';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { AppConfig } from '../config/index.js';
 import type { UsageMetadata } from '../state/usage.js';
@@ -25,10 +31,7 @@ export interface AgentResult {
 
 export interface AgentRunner {
   run: (messages: AgentMessage[]) => Promise<AgentResult>;
-  stream: (
-    messages: AgentMessage[],
-    options?: Parameters<ReturnType<typeof createDeepAgent>['streamEvents']>[2]
-  ) => AsyncIterable<any>;
+  stream: (messages: AgentMessage[], options?: any) => AsyncIterable<any>;
   summarize: (
     messages: AgentMessage[],
     context: { actions?: string; fallbackReasoning?: string; lastUser?: string }
@@ -48,12 +51,43 @@ export const createAgentRunner = (config: AppConfig): AgentRunner => {
   });
   const customTools = buildTools(workspaceRoot);
 
-  const agent = createDeepAgent({
-    model,
-    systemPrompt: config.systemPrompt,
-    backend,
-    tools: customTools
-  });
+  const makeAgent = () => {
+    const finalSystemPrompt = `${config.systemPrompt}\n\nIn order to complete the objective that the user asks of you, you have access to a number of standard tools.`;
+    const middleware = [
+      todoListMiddleware(),
+      createFilesystemMiddleware({ backend }),
+      createSubAgentMiddleware({
+        defaultModel: model,
+        defaultTools: customTools,
+        defaultMiddleware: [
+          todoListMiddleware(),
+          createFilesystemMiddleware({ backend }),
+          summarizationMiddleware({
+            model,
+            trigger: { tokens: 170_000 },
+            keep: { messages: 6 }
+          }),
+          createPatchToolCallsMiddleware()
+        ],
+        generalPurposeAgent: true
+      }),
+      summarizationMiddleware({
+        model,
+        trigger: { tokens: 170_000 },
+        keep: { messages: 6 }
+      }),
+      createPatchToolCallsMiddleware()
+    ];
+
+    return createAgent({
+      model,
+      systemPrompt: finalSystemPrompt,
+      tools: customTools,
+      middleware
+    });
+  };
+
+  const agent = makeAgent();
 
   const toDeepMessage = (message: AgentMessage) => {
     if (message.images && message.images.length > 0) {
